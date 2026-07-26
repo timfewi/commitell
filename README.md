@@ -45,6 +45,48 @@ Or build the current checkout:
 go build .
 ```
 
+### Nix
+
+Run it without installing anything:
+
+```sh
+nix run github:timfewi/commitell
+```
+
+The flake declares `packages.default` and `devShells.default` for `x86_64` and
+`aarch64` on Linux and Darwin. To install it from a NixOS or home-manager
+config, add the input and reference the package in a module that receives
+`inputs`:
+
+```nix
+# flake.nix
+inputs.commitell = {
+  url = "github:timfewi/commitell";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+
+# any module with `inputs` in scope
+environment.systemPackages = [
+  inputs.commitell.packages.${pkgs.stdenv.hostPlatform.system}.default
+];
+```
+
+`commitell` reads `OPENROUTER_API_KEY` from the environment. Do not put the key
+in a Nix expression — string literals end up world-readable in `/nix/store`.
+Wrap the package instead and read the secret at runtime, for example from
+[agenix](https://github.com/ryantm/agenix):
+
+```nix
+pkgs.writeShellApplication {
+  name = "commitell";
+  runtimeInputs = [ pkgs.git pkgs.coreutils ];
+  text = ''
+    OPENROUTER_API_KEY="$(cat ${config.age.secrets.openrouter-api-key.path})" \
+      exec ${inputs.commitell.packages.${pkgs.stdenv.hostPlatform.system}.default}/bin/commitell "$@"
+  '';
+}
+```
+
 ## Behavior
 
 Before changing the index, `commitell`:
@@ -71,6 +113,9 @@ the changes remain staged and no file content is discarded.
 go test ./...
 go vet ./...
 ```
+
+With Nix, `nix develop` provides Go, gopls, and Git; `nix build` runs the tests
+as part of the build.
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
 small set of project rules.
