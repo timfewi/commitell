@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,8 +19,7 @@ import (
 )
 
 const (
-	version            = "0.1.0"
-	openRouterURL      = "https://openrouter.ai/api/v1/chat/completions"
+	version            = "0.2.0"
 	maxPromptDiffBytes = 512 * 1024
 	maxUntrackedBytes  = 512 * 1024
 )
@@ -49,15 +46,12 @@ type config struct {
 	dir      string
 	apiKey   string
 	endpoint string
+	apiBase  string
 	client   *http.Client
 	out      io.Writer
 	errOut   io.Writer
-}
-
-type snapshot struct {
-	status      string
-	diff        string
-	fingerprint string
+	options  options
+	models   []string
 }
 
 type commitMessage struct {
@@ -95,31 +89,47 @@ type chatResponse struct {
 }
 
 func main() {
-	switch {
-	case len(os.Args) == 2 && (os.Args[1] == "--help" || os.Args[1] == "-h"):
-		fmt.Print("Usage: commitell\n\nCreate one AI-written, DCO-signed commit from all dirty changes.\n\nEnvironment:\n  OPENROUTER_API_KEY  required\n")
+	if len(os.Args) == 2 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+		usage(os.Stdout)
 		return
-	case len(os.Args) == 2 && os.Args[1] == "--version":
+	}
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println("commitell", version)
 		return
-	case len(os.Args) != 1:
-		fmt.Fprintln(os.Stderr, "commitell: no arguments accepted; try --help")
+	}
+	opts, err := parseOptions(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "commitell:", err)
+		fmt.Fprintln(os.Stderr, "Try --help for usage.")
 		os.Exit(2)
 	}
-
+	base := openRouterBaseURL
+	if opts.eu {
+		base = openRouterEUBaseURL
+	}
+	cfg := config{
+		apiKey:   os.Getenv("OPENROUTER_API_KEY"),
+		apiBase:  base,
+		endpoint: base + "/chat/completions",
+		client:   &http.Client{Timeout: 30 * time.Second},
+		out:      os.Stdout,
+		errOut:   os.Stderr,
+		options:  opts,
+		models:   opts.solvers,
+	}
+	if opts.models {
+		if err := listModels(context.Background(), cfg, opts.eu); err != nil {
+			fmt.Fprintln(os.Stderr, "commitell:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	dir, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "commitell:", err)
 		os.Exit(1)
 	}
-	cfg := config{
-		dir:      dir,
-		apiKey:   os.Getenv("OPENROUTER_API_KEY"),
-		endpoint: openRouterURL,
-		client:   &http.Client{Timeout: 30 * time.Second},
-		out:      os.Stdout,
-		errOut:   os.Stderr,
-	}
+	cfg.dir = dir
 	if err := run(context.Background(), cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "commitell:", err)
 		os.Exit(1)
@@ -139,6 +149,10 @@ func run(ctx context.Context, cfg config) error {
 	if err := checkRepository(root); err != nil {
 		return err
 	}
+	publishPlan, err := preflightPublish(cfg, root)
+	if err != nil {
+		return err
+	}
 	name, err := gitOutput(root, "config", "user.name")
 	if err != nil || strings.TrimSpace(string(name)) == "" {
 		return errors.New("Git user.name is not configured")
@@ -148,41 +162,53 @@ func run(ctx context.Context, cfg config) error {
 		return errors.New("Git user.email is not configured")
 	}
 
-	before, err := captureSnapshot(root)
+	before, err := captureSnapshot(root, cfg.options)
 	if err != nil {
 		return err
 	}
-	if before.status == "" {
-		return errors.New("working tree is clean")
-	}
-
 	history, _ := gitOutput(root, "log", "-20", "--pretty=format:%s")
-	message, model, err := generateMessage(ctx, cfg, before, string(history))
+	snapshots, err := planSnapshots(ctx, cfg, before)
 	if err != nil {
 		return err
 	}
-
-	after, err := captureSnapshot(root)
+	groups, err := prepareGroups(ctx, cfg, snapshots, string(history))
 	if err != nil {
 		return err
 	}
-	if before.fingerprint != after.fingerprint {
-		return errors.New("working tree changed during analysis; nothing was staged")
+	if cfg.options.dryRun {
+		printDryRun(cfg, groups, publishPlan)
+		return nil
+	}
+	if err := validateSnapshot(root, before, cfg.options.staged); err != nil {
+		return err
 	}
 
-	if _, err := gitOutput(root, "add", "-A"); err != nil {
-		return fmt.Errorf("git add -A: %w", err)
+	selective := cfg.options.staged || len(cfg.options.excludes) != 0 || cfg.options.split
+	if selective {
+		if err := commitScoped(ctx, cfg, root, groups); err != nil {
+			return err
+		}
+	} else {
+		if _, err := gitOutput(root, "add", "-A"); err != nil {
+			return fmt.Errorf("git add -A: %w", err)
+		}
+		group := groups[0]
+		args := []string{"commit", "-s", "-m", group.message.Subject}
+		if group.message.Body != "" {
+			args = append(args, "-m", group.message.Body)
+		}
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+		cmd.Stdout, cmd.Stderr = cfg.out, cfg.errOut
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("git commit failed (changes remain staged): %w", err)
+		}
+		fmt.Fprintf(cfg.out, "commitell: committed with %s\n", group.model)
 	}
-	args := []string{"commit", "-s", "-m", message.Subject}
-	if message.Body != "" {
-		args = append(args, "-m", message.Body)
+	if publishPlan != nil {
+		if err := publish(ctx, cfg, root, *publishPlan); err != nil {
+			return err
+		}
 	}
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
-	cmd.Stdout, cmd.Stderr = cfg.out, cfg.errOut
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git commit failed (changes remain staged): %w", err)
-	}
-	fmt.Fprintf(cfg.out, "commitell: committed with %s\n", model)
 	return nil
 }
 
@@ -210,86 +236,6 @@ func checkRepository(root string) error {
 		}
 	}
 	return nil
-}
-
-func captureSnapshot(root string) (snapshot, error) {
-	statusRaw, err := gitOutput(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
-	if err != nil {
-		return snapshot{}, fmt.Errorf("git status: %w", err)
-	}
-	if len(statusRaw) == 0 {
-		return snapshot{}, nil
-	}
-	statusText, err := gitOutput(root, "status", "--short", "--untracked-files=all")
-	if err != nil {
-		return snapshot{}, fmt.Errorf("git status: %w", err)
-	}
-
-	paths, untracked := parseStatus(statusRaw)
-	if err := scanSecretPaths(paths); err != nil {
-		return snapshot{}, err
-	}
-
-	var tracked []byte
-	if _, err := gitOutput(root, "rev-parse", "--verify", "HEAD"); err == nil {
-		tracked, err = gitOutput(root, "diff", "--no-ext-diff", "--no-textconv", "--find-renames", "HEAD", "--")
-	} else {
-		tracked, err = gitOutput(root, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--find-renames", "--")
-		if err == nil {
-			unstaged, unstagedErr := gitOutput(root, "diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--")
-			if unstagedErr != nil {
-				return snapshot{}, fmt.Errorf("git diff: %w", unstagedErr)
-			}
-			tracked = append(tracked, unstaged...)
-		}
-	}
-	if err != nil {
-		return snapshot{}, fmt.Errorf("git diff: %w", err)
-	}
-
-	var diff bytes.Buffer
-	diff.Write(tracked)
-	for _, path := range untracked {
-		if err := appendUntracked(&diff, root, path); err != nil {
-			return snapshot{}, err
-		}
-	}
-	outbound := append(append([]byte(nil), statusText...), diff.Bytes()...)
-	if err := scanSecrets(outbound); err != nil {
-		return snapshot{}, err
-	}
-
-	fingerprint, err := fingerprint(root, statusRaw, paths)
-	if err != nil {
-		return snapshot{}, err
-	}
-	return snapshot{
-		status:      string(statusText),
-		diff:        truncateUTF8(diff.Bytes(), maxPromptDiffBytes),
-		fingerprint: fingerprint,
-	}, nil
-}
-
-func parseStatus(raw []byte) (paths, untracked []string) {
-	records := bytes.Split(raw, []byte{0})
-	for i := 0; i < len(records); i++ {
-		record := records[i]
-		if len(record) < 4 {
-			continue
-		}
-		code, path := string(record[:2]), string(record[3:])
-		paths = append(paths, path)
-		if code == "??" {
-			untracked = append(untracked, path)
-		}
-		if strings.ContainsAny(code, "RC") && i+1 < len(records) {
-			i++
-			if len(records[i]) > 0 {
-				paths = append(paths, string(records[i]))
-			}
-		}
-	}
-	return paths, untracked
 }
 
 func appendUntracked(dst *bytes.Buffer, root, path string) error {
@@ -334,48 +280,6 @@ func appendUntracked(dst *bytes.Buffer, root, path string) error {
 		dst.WriteByte('\n')
 	}
 	return nil
-}
-
-func fingerprint(root string, status []byte, paths []string) (string, error) {
-	hash := sha256.New()
-	hash.Write(status)
-	for _, path := range paths {
-		io.WriteString(hash, "\x00"+path+"\x00")
-		full := filepath.Join(root, filepath.FromSlash(path))
-		info, err := os.Lstat(full)
-		if errors.Is(err, os.ErrNotExist) {
-			io.WriteString(hash, "deleted")
-			continue
-		}
-		if err != nil {
-			return "", fmt.Errorf("fingerprint %q: %w", path, err)
-		}
-		io.WriteString(hash, info.Mode().String())
-		if info.Mode()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(full)
-			if err != nil {
-				return "", fmt.Errorf("fingerprint symlink %q: %w", path, err)
-			}
-			io.WriteString(hash, target)
-			continue
-		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		file, err := os.Open(full)
-		if err != nil {
-			return "", fmt.Errorf("fingerprint %q: %w", path, err)
-		}
-		_, copyErr := io.Copy(hash, file)
-		closeErr := file.Close()
-		if copyErr != nil {
-			return "", fmt.Errorf("fingerprint %q: %w", path, copyErr)
-		}
-		if closeErr != nil {
-			return "", fmt.Errorf("fingerprint %q: %w", path, closeErr)
-		}
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func scanSecretPaths(paths []string) error {
@@ -452,7 +356,7 @@ CHANGES:
 </diff>`, history, snap.status, snap.diff)
 
 	var failures []string
-	for _, model := range models {
+	for _, model := range configuredModels(cfg) {
 		message, err := requestMessage(ctx, cfg, model, prompt)
 		if err == nil {
 			return message, model, nil
@@ -464,6 +368,21 @@ CHANGES:
 }
 
 func requestMessage(ctx context.Context, cfg config, model, prompt string) (commitMessage, error) {
+	content, err := requestContent(ctx, cfg, model, prompt, 800)
+	if err != nil {
+		return commitMessage{}, err
+	}
+	return parseCommitMessage(content)
+}
+
+func configuredModels(cfg config) []string {
+	if len(cfg.models) != 0 {
+		return cfg.models
+	}
+	return models
+}
+
+func requestContent(ctx context.Context, cfg config, model, prompt string, maxTokens int) (string, error) {
 	payload := chatRequest{
 		Model: model,
 		Messages: []chatMessage{
@@ -478,15 +397,15 @@ func requestMessage(ctx context.Context, cfg config, model, prompt string) (comm
 		},
 		ResponseFormat: map[string]any{"type": "json_object"},
 		Temperature:    0.2,
-		MaxTokens:      800,
+		MaxTokens:      maxTokens,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return commitMessage{}, err
+		return "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return commitMessage{}, err
+		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.apiKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -494,21 +413,21 @@ func requestMessage(ctx context.Context, cfg config, model, prompt string) (comm
 
 	response, err := cfg.client.Do(req)
 	if err != nil {
-		return commitMessage{}, err
+		return "", err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 512))
-		return commitMessage{}, fmt.Errorf("OpenRouter returned %s: %s", response.Status, strings.TrimSpace(string(detail)))
+		return "", fmt.Errorf("OpenRouter returned %s: %s", response.Status, strings.TrimSpace(string(detail)))
 	}
 	var decoded chatResponse
 	if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil {
-		return commitMessage{}, fmt.Errorf("decode OpenRouter response: %w", err)
+		return "", fmt.Errorf("decode OpenRouter response: %w", err)
 	}
 	if len(decoded.Choices) == 0 {
-		return commitMessage{}, errors.New("OpenRouter returned no choices")
+		return "", errors.New("OpenRouter returned no choices")
 	}
-	return parseCommitMessage(decoded.Choices[0].Message.Content)
+	return decoded.Choices[0].Message.Content, nil
 }
 
 func parseCommitMessage(content string) (commitMessage, error) {

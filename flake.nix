@@ -12,7 +12,7 @@
       packages = forAllSystems (pkgs: rec {
         commitell = pkgs.buildGoModule {
           pname = "commitell";
-          version = "0.1.0";
+          version = "0.2.0";
           src = self;
           vendorHash = null; # stdlib only, no dependencies
           nativeCheckInputs = [ pkgs.git ]; # tests shell out to git

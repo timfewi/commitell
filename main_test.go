@@ -17,7 +17,7 @@ import (
 )
 
 func TestParseCommitMessage(t *testing.T) {
-	message, err := parseCommitMessage(`{"subject":"feat(cli): commit all changes","body":"Keep repository history useful without manual writing."}`)
+	message, err := parseCommitMessage(testString(t, "commit_message.valid"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestRunUsesPrivateFallbackAndCommitsEverything(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"subject\":\"feat: update tracked and new files\",\"body\":\"Capture the complete working tree in one coherent change.\"}"}}]}`)
+		fmt.Fprint(w, testString(t, "openrouter.private_fallback_response"))
 	}))
 	defer server.Close()
 
