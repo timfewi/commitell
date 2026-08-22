@@ -318,6 +318,42 @@ func TestRunPushesAndCreatesDraftPullRequest(t *testing.T) {
 	}
 }
 
+func TestRunForcePushesDefaultBranch(t *testing.T) {
+	server := commitMessageServer(t, "feat: publish main")
+	defer server.Close()
+	repo := newRepository(t)
+	git(t, repo, "branch", "-M", "main")
+	remote := t.TempDir()
+	git(t, remote, "init", "--bare", "-q")
+	git(t, repo, "remote", "add", "origin", remote)
+	writeFile(t, filepath.Join(repo, "tracked.txt"), "published from main\n")
+
+	opts := options{push: true, force: true, remote: "origin", base: "main"}
+	if err := run(context.Background(), testConfig(repo, server, opts)); err != nil {
+		t.Fatal(err)
+	}
+	if remoteHead := git(t, remote, "rev-parse", "refs/heads/main"); remoteHead != git(t, repo, "rev-parse", "HEAD") {
+		t.Fatal("force push did not publish the default branch")
+	}
+}
+
+func TestPreflightPublishProtectsDefaultBranchUnlessForced(t *testing.T) {
+	repo := newRepository(t)
+	git(t, repo, "branch", "-M", "main")
+	remote := t.TempDir()
+	git(t, remote, "init", "--bare", "-q")
+	git(t, repo, "remote", "add", "origin", remote)
+
+	cfg := config{options: options{push: true, remote: "origin", base: "main"}}
+	if _, err := preflightPublish(cfg, repo); err == nil || !strings.Contains(err.Error(), "refusing to publish directly") {
+		t.Fatalf("default branch was not protected: %v", err)
+	}
+	cfg.options.force = true
+	if _, err := preflightPublish(cfg, repo); err != nil {
+		t.Fatalf("force did not permit default branch publishing: %v", err)
+	}
+}
+
 func TestRunComposesStagedExcludeSplitSolverAndPullRequest(t *testing.T) {
 	var requested []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

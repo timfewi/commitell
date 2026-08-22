@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"time"
 	"unicode"
@@ -19,10 +20,13 @@ import (
 )
 
 const (
-	version            = "0.2.0"
 	maxPromptDiffBytes = 512 * 1024
 	maxUntrackedBytes  = 512 * 1024
 )
+
+// version is set by release builds. Go-installed builds fall back to the
+// module version recorded in their build information.
+var version = "dev"
 
 var (
 	models = []string{
@@ -94,7 +98,7 @@ func main() {
 		return
 	}
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
-		fmt.Println("commitell", version)
+		fmt.Println("commitell", currentVersion())
 		return
 	}
 	opts, err := parseOptions(os.Args[1:])
@@ -136,6 +140,17 @@ func main() {
 	}
 }
 
+func currentVersion() string {
+	if version != "" && version != "dev" {
+		return strings.TrimPrefix(version, "v")
+	}
+	info, ok := debug.ReadBuildInfo()
+	if ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return strings.TrimPrefix(info.Main.Version, "v")
+	}
+	return "dev"
+}
+
 func run(ctx context.Context, cfg config) error {
 	if strings.TrimSpace(cfg.apiKey) == "" {
 		return errors.New("OPENROUTER_API_KEY is not set")
@@ -148,6 +163,17 @@ func run(ctx context.Context, cfg config) error {
 	root := strings.TrimSpace(string(rootBytes))
 	if err := checkRepository(root); err != nil {
 		return err
+	}
+	if cfg.options.force {
+		fmt.Fprintln(cfg.errOut, "commitell: warning: --force bypasses local secret checks and may send sensitive content to the selected model")
+	}
+	if cfg.options.autoModel {
+		resolved, err := autoSelectModels(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		cfg.models = resolved
+		fmt.Fprintf(cfg.errOut, "commitell: automatically selected models: %s\n", strings.Join(resolved, ", "))
 	}
 	publishPlan, err := preflightPublish(cfg, root)
 	if err != nil {
@@ -327,8 +353,10 @@ func truncateUTF8(content []byte, limit int) string {
 }
 
 func generateMessage(ctx context.Context, cfg config, snap snapshot, history string) (commitMessage, string, error) {
-	if err := scanSecrets([]byte(history)); err != nil {
-		return commitMessage{}, "", fmt.Errorf("refusing to send recent commit history: %w", err)
+	if !cfg.options.force {
+		if err := scanSecrets([]byte(history)); err != nil {
+			return commitMessage{}, "", fmt.Errorf("refusing to send recent commit history: %w", err)
+		}
 	}
 	prompt := fmt.Sprintf(`Write one Git commit message for all supplied changes.
 

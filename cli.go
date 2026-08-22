@@ -15,9 +15,11 @@ type options struct {
 	staged      bool
 	excludes    []string
 	solvers     []string
+	autoModel   bool
 	split       bool
 	dryRun      bool
 	push        bool
+	force       bool
 	pullRequest bool
 	remote      string
 	base        string
@@ -58,10 +60,13 @@ func parseOptions(args []string) (options, error) {
 	set.BoolVar(&opts.eu, "eu", false, "use EU in-region OpenRouter routing")
 	set.BoolVar(&opts.staged, "staged", false, "commit only staged changes")
 	set.Var(listValue{values: &opts.excludes, splitComma: true}, "exclude", "exclude repository-relative files")
-	set.Var(listValue{values: &opts.solvers}, "solver", "OpenRouter model to try, in fallback order")
+	set.Var(listValue{values: &opts.solvers}, "solver", "OpenRouter model to try, in fallback order (alias: --model)")
+	set.Var(listValue{values: &opts.solvers}, "model", "OpenRouter model to try, in fallback order")
+	set.BoolVar(&opts.autoModel, "auto-model", false, "select compatible OpenRouter models automatically")
 	set.BoolVar(&opts.split, "split", false, "split changes into logical commits")
 	set.BoolVar(&opts.dryRun, "dry-run", false, "show the plan without changing Git or publishing")
 	set.BoolVar(&opts.push, "push", false, "push the current branch after committing")
+	set.BoolVar(&opts.force, "force", false, "bypass local secret checks and allow a force-push to the default branch")
 	set.BoolVar(&opts.pullRequest, "pr", false, "push and create a draft pull request")
 	set.StringVar(&opts.remote, "remote", "origin", "Git remote used for publishing")
 	set.StringVar(&opts.base, "base", "", "default and pull-request base branch")
@@ -73,6 +78,9 @@ func parseOptions(args []string) (options, error) {
 	}
 	if opts.pullRequest {
 		opts.push = true
+	}
+	if opts.autoModel && len(opts.solvers) != 0 {
+		return options{}, errors.New("--auto-model cannot be combined with --model or --solver")
 	}
 	if strings.TrimSpace(opts.remote) == "" {
 		return options{}, errors.New("--remote must not be empty")
@@ -91,7 +99,7 @@ func parseOptions(args []string) (options, error) {
 		}
 		opts.solvers[i] = model
 	}
-	if opts.models && (opts.staged || len(opts.excludes) != 0 || len(opts.solvers) != 0 || opts.split || opts.dryRun || opts.push || opts.pullRequest || opts.base != "" || opts.remote != "origin") {
+	if opts.models && (opts.staged || len(opts.excludes) != 0 || len(opts.solvers) != 0 || opts.autoModel || opts.split || opts.dryRun || opts.push || opts.force || opts.pullRequest || opts.base != "" || opts.remote != "origin") {
 		return options{}, errors.New("--models can only be combined with --eu")
 	}
 	return opts, nil
@@ -118,11 +126,14 @@ Options:
   --staged              commit only staged changes
   --exclude FILES       exclude exact files; repeat or use comma-separated values
   --split               split files into logical commits
-  --solver MODEL        model to try; repeat to define the fallback order
+  --model MODEL         model to try; repeat to define the fallback order
+  --solver MODEL        alias for --model
+  --auto-model          choose and rank account-compatible ZDR models automatically
   --dry-run             print commits and publish actions without changing anything
   --eu                  use EU in-region OpenRouter routing
   --models              list account-, guardrail-, and ZDR-compatible models
-  --push                push the current non-default branch after committing
+  --push                push the current branch after committing
+  --force               bypass local secret checks; permits force-pushing the default branch
   --pr                  push and create a draft pull request
   --remote NAME         publishing remote (default: origin)
   --base BRANCH         default and pull-request base branch

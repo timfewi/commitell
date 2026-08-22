@@ -36,6 +36,15 @@ func TestParseCommitMessage(t *testing.T) {
 	}
 }
 
+func TestCurrentVersionUsesReleaseOverride(t *testing.T) {
+	previous := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = previous })
+	if got := currentVersion(); got != "1.2.3" {
+		t.Fatalf("currentVersion() = %q, want 1.2.3", got)
+	}
+}
+
 func TestSecretDetection(t *testing.T) {
 	if err := scanSecretPaths([]string{"src/main.go", ".env.example"}); err != nil {
 		t.Fatal(err)
@@ -46,6 +55,20 @@ func TestSecretDetection(t *testing.T) {
 	fakeKey := "sk-or-v1-" + "abcdefghijklmnopqrstuvwxyz"
 	if err := scanSecrets([]byte("+ OPENROUTER_API_KEY=" + fakeKey + "\n")); err == nil {
 		t.Fatal("accepted secret content")
+	}
+}
+
+func TestRunForceBypassesLocalSecretChecks(t *testing.T) {
+	server := commitMessageServer(t, "chore: add environment configuration")
+	defer server.Close()
+	repo := newRepository(t)
+	writeFile(t, filepath.Join(repo, ".env.production"), "OPENROUTER_API_KEY=sk-or-v1-abcdefghijklmnopqrstuvwxyz\n")
+
+	if err := run(context.Background(), testConfig(repo, server, options{force: true})); err != nil {
+		t.Fatal(err)
+	}
+	if files := git(t, repo, "show", "--pretty=", "--name-only", "HEAD"); files != ".env.production" {
+		t.Fatalf("force commit files = %q", files)
 	}
 }
 

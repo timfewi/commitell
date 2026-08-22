@@ -62,6 +62,8 @@ type compatibleModel struct {
 	Default       bool
 }
 
+const minAutomaticModelContext = 128 * 1024
+
 func listModels(ctx context.Context, cfg config, eu bool) error {
 	if strings.TrimSpace(cfg.apiKey) == "" {
 		return errors.New("OPENROUTER_API_KEY is not set")
@@ -95,15 +97,50 @@ func listModels(ctx context.Context, cfg config, eu bool) error {
 	}
 	fmt.Fprintln(cfg.out)
 	tw := tabwriter.NewWriter(cfg.out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "MODEL\tCONTEXT\tINPUT/1M\tOUTPUT/1M\tDEFAULT")
-	for _, model := range compatible {
-		isDefault := ""
+	fmt.Fprintln(tw, "RANK\tMODEL\tCONTEXT\tINPUT/1M\tOUTPUT/1M\tRECOMMENDED")
+	for rank, model := range compatible {
+		recommended := ""
 		if model.Default {
-			isDefault = "yes"
+			recommended = "yes"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", model.ID, formatContext(model.ContextLength), formatPrice(model.PromptPrice), formatPrice(model.OutputPrice), isDefault)
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n", rank+1, model.ID, formatContext(model.ContextLength), formatPrice(model.PromptPrice), formatPrice(model.OutputPrice), recommended)
 	}
 	return tw.Flush()
+}
+
+// autoSelectModels returns account-visible, privacy-compatible models in the
+// same order shown by --models. Preferred defaults come first, followed by
+// larger-context and lower-cost compatible fallbacks.
+func autoSelectModels(ctx context.Context, cfg config) ([]string, error) {
+	base := cfg.apiBase
+	if base == "" {
+		base = openRouterBaseURL
+		if cfg.options.eu {
+			base = openRouterEUBaseURL
+		}
+	}
+	userModels, err := fetchUserModels(ctx, cfg, base)
+	if err != nil {
+		return nil, err
+	}
+	endpoints, err := fetchZDREndpoints(ctx, cfg, base)
+	if err != nil {
+		return nil, err
+	}
+	compatible := intersectModels(userModels, endpoints)
+	if len(compatible) == 0 {
+		return nil, errors.New("OpenRouter returned no models compatible with commitell, account guardrails, and ZDR")
+	}
+	selected := make([]string, 0, len(compatible))
+	for _, model := range compatible {
+		if model.ContextLength >= minAutomaticModelContext {
+			selected = append(selected, model.ID)
+		}
+	}
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("OpenRouter returned no compatible model with at least %s of context", formatContext(minAutomaticModelContext))
+	}
+	return selected, nil
 }
 
 func fetchUserModels(ctx context.Context, cfg config, base string) ([]userModel, error) {
@@ -197,9 +234,29 @@ func intersectModels(userModels []userModel, endpoints []zdrEndpoint) []compatib
 		if result[i].Default != result[j].Default {
 			return result[i].Default
 		}
+		if result[i].ContextLength != result[j].ContextLength {
+			return result[i].ContextLength > result[j].ContextLength
+		}
+		leftPrice, rightPrice := totalModelPrice(result[i]), totalModelPrice(result[j])
+		if leftPrice != rightPrice {
+			if leftPrice < 0 {
+				return false
+			}
+			if rightPrice < 0 {
+				return true
+			}
+			return leftPrice < rightPrice
+		}
 		return result[i].ID < result[j].ID
 	})
 	return result
+}
+
+func totalModelPrice(model compatibleModel) float64 {
+	if model.PromptPrice < 0 || model.OutputPrice < 0 {
+		return -1
+	}
+	return model.PromptPrice + model.OutputPrice
 }
 
 func supportsAll(have, required []string) bool {

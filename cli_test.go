@@ -52,6 +52,19 @@ func TestParseOptionsModelsIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestParseOptionsSupportsModelAliasAutoSelectionAndForce(t *testing.T) {
+	opts, err := parseOptions([]string{"--model", "model/one", "--solver", "model/two", "--force"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.force || !reflect.DeepEqual(opts.solvers, []string{"model/one", "model/two"}) {
+		t.Fatalf("unexpected options: %+v", opts)
+	}
+	if _, err := parseOptions([]string{"--auto-model", "--model", "model/one"}); err == nil || !strings.Contains(err.Error(), "--auto-model") {
+		t.Fatalf("unexpected auto-model conflict: %v", err)
+	}
+}
+
 func TestParseOptionsRejectsUnsafeExclude(t *testing.T) {
 	for _, path := range []string{"/tmp/file", "../file", ""} {
 		if _, err := parseOptions([]string{"--exclude", path}); err == nil {

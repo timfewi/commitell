@@ -81,7 +81,7 @@ func captureSnapshot(root string, opts options) (snapshot, error) {
 	var status, diff bytes.Buffer
 	hash := sha256.New()
 	for _, item := range changes {
-		entry, err := captureChange(root, item, opts.staged)
+		entry, err := captureChange(root, item, opts)
 		if err != nil {
 			return snapshot{}, withExcludeHint(item.Path, err)
 		}
@@ -154,10 +154,12 @@ func applyExcludes(changes []change, excludes []string) ([]change, error) {
 	return selected, nil
 }
 
-func captureChange(root string, item change, staged bool) (changeSnapshot, error) {
+func captureChange(root string, item change, opts options) (changeSnapshot, error) {
 	paths := changePaths(item)
-	if err := scanSecretPaths(paths); err != nil {
-		return changeSnapshot{}, err
+	if !opts.force {
+		if err := scanSecretPaths(paths); err != nil {
+			return changeSnapshot{}, err
+		}
 	}
 	var fragment bytes.Buffer
 	if item.Untracked {
@@ -166,7 +168,7 @@ func captureChange(root string, item change, staged bool) (changeSnapshot, error
 		}
 	} else {
 		args := []string{"diff"}
-		if staged {
+		if opts.staged {
 			args = append(args, "--cached")
 		}
 		args = append(args, "--binary", "--no-ext-diff", "--no-textconv", "--find-renames")
@@ -183,10 +185,12 @@ func captureChange(root string, item change, staged bool) (changeSnapshot, error
 	}
 	status := item.Code + " " + item.Path + "\n"
 	outbound := append([]byte(status), fragment.Bytes()...)
-	if err := scanSecrets(outbound); err != nil {
-		return changeSnapshot{}, err
+	if !opts.force {
+		if err := scanSecrets(outbound); err != nil {
+			return changeSnapshot{}, err
+		}
 	}
-	fingerprint, err := fingerprintChange(root, item, staged)
+	fingerprint, err := fingerprintChange(root, item, opts.staged)
 	if err != nil {
 		return changeSnapshot{}, err
 	}
@@ -538,8 +542,11 @@ func preflightPublish(cfg config, root string) (*publishPlan, error) {
 		}
 		base = strings.TrimPrefix(strings.TrimSpace(string(ref)), cfg.options.remote+"/")
 	}
-	if branch == base {
+	if branch == base && !cfg.options.force {
 		return nil, fmt.Errorf("refusing to publish directly from default branch %q", base)
+	}
+	if branch == base && cfg.options.pullRequest {
+		return nil, errors.New("--pr cannot be used from the default branch, even with --force")
 	}
 	if cfg.options.pullRequest {
 		if _, err := exec.LookPath("gh"); err != nil {
@@ -557,7 +564,12 @@ func preflightPublish(cfg config, root string) (*publishPlan, error) {
 }
 
 func publish(ctx context.Context, cfg config, root string, plan publishPlan) error {
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "push", "--set-upstream", plan.remote, "HEAD")
+	args := []string{"-C", root, "push", "--set-upstream"}
+	if cfg.options.force {
+		args = append(args, "--force-with-lease")
+	}
+	args = append(args, plan.remote, "HEAD")
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Stdout, cmd.Stderr = cfg.out, cfg.errOut
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git push failed: %w", err)
