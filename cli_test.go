@@ -1,10 +1,20 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestParseOptionsRecognizesHelp(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"--staged", "--help"}} {
+		if _, err := parseOptions(args); !errors.Is(err, flag.ErrHelp) {
+			t.Fatalf("args %v: error = %v, want flag.ErrHelp", args, err)
+		}
+	}
+}
 
 func TestParseOptionsComposesWorkflowFlags(t *testing.T) {
 	opts, err := parseOptions([]string{

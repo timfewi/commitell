@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -93,15 +94,15 @@ type chatResponse struct {
 }
 
 func main() {
-	if len(os.Args) == 2 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
-		usage(os.Stdout)
-		return
-	}
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println("commitell", currentVersion())
 		return
 	}
 	opts, err := parseOptions(os.Args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		usage(os.Stdout)
+		return
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "commitell:", err)
 		fmt.Fprintln(os.Stderr, "Try --help for usage.")
