@@ -63,6 +63,7 @@
             pkgs.git
             pkgs.gh
             pkgs.gnumake
+            pkgs.just
             pkgs.nixfmt-tree
           ];
 
