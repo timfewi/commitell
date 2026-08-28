@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -32,7 +33,8 @@ var version = "dev"
 var (
 	models = []string{
 		"google/gemini-3.1-flash-lite",
-		"qwen/qwen3-coder-30b-a3b-instruct",
+		"google/gemini-2.5-flash-lite",
+		"openai/gpt-4o-mini",
 	}
 	secretPatterns = []struct {
 		name string
@@ -48,15 +50,17 @@ var (
 )
 
 type config struct {
-	dir      string
-	apiKey   string
-	endpoint string
-	apiBase  string
-	client   *http.Client
-	out      io.Writer
-	errOut   io.Writer
-	options  options
-	models   []string
+	dir         string
+	apiKey      string
+	endpoint    string
+	apiBase     string
+	client      *http.Client
+	in          io.Reader
+	out         io.Writer
+	errOut      io.Writer
+	interactive bool
+	options     options
+	models      []string
 }
 
 type commitMessage struct {
@@ -65,12 +69,13 @@ type commitMessage struct {
 }
 
 type chatRequest struct {
-	Model          string         `json:"model"`
-	Messages       []chatMessage  `json:"messages"`
-	Provider       providerPolicy `json:"provider"`
-	ResponseFormat map[string]any `json:"response_format"`
-	Temperature    float64        `json:"temperature"`
-	MaxTokens      int            `json:"max_tokens"`
+	Model               string         `json:"model"`
+	Messages            []chatMessage  `json:"messages"`
+	Provider            providerPolicy `json:"provider"`
+	ResponseFormat      map[string]any `json:"response_format"`
+	Temperature         float64        `json:"temperature"`
+	MaxTokens           int            `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int            `json:"max_completion_tokens,omitempty"`
 }
 
 type chatMessage struct {
@@ -94,10 +99,6 @@ type chatResponse struct {
 }
 
 func main() {
-	if len(os.Args) == 2 && os.Args[1] == "--version" {
-		fmt.Println("commitell", currentVersion())
-		return
-	}
 	opts, err := parseOptions(os.Args[1:])
 	if errors.Is(err, flag.ErrHelp) {
 		usage(os.Stdout)
@@ -108,19 +109,25 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Try --help for usage.")
 		os.Exit(2)
 	}
+	if opts.version {
+		fmt.Println("commitell", currentVersion())
+		return
+	}
 	base := openRouterBaseURL
 	if opts.eu {
 		base = openRouterEUBaseURL
 	}
 	cfg := config{
-		apiKey:   os.Getenv("OPENROUTER_API_KEY"),
-		apiBase:  base,
-		endpoint: base + "/chat/completions",
-		client:   &http.Client{Timeout: 30 * time.Second},
-		out:      os.Stdout,
-		errOut:   os.Stderr,
-		options:  opts,
-		models:   opts.solvers,
+		apiKey:      os.Getenv("OPENROUTER_API_KEY"),
+		apiBase:     base,
+		endpoint:    base + "/chat/completions",
+		client:      &http.Client{Timeout: 30 * time.Second},
+		in:          os.Stdin,
+		out:         os.Stdout,
+		errOut:      os.Stderr,
+		interactive: isTerminal(os.Stdin),
+		options:     opts,
+		models:      opts.solvers,
 	}
 	if opts.models {
 		if err := listModels(context.Background(), cfg, opts.eu); err != nil {
@@ -153,7 +160,10 @@ func currentVersion() string {
 }
 
 func run(ctx context.Context, cfg config) error {
-	if strings.TrimSpace(cfg.apiKey) == "" {
+	if cfg.options.offline && (cfg.options.autoModel || len(cfg.options.solvers) != 0 || len(cfg.models) != 0 || cfg.options.eu || cfg.options.split) {
+		return errors.New("--offline cannot be combined with --auto-model, --model, --solver, --eu, or --split")
+	}
+	if !cfg.options.offline && strings.TrimSpace(cfg.apiKey) == "" {
 		return errors.New("OPENROUTER_API_KEY is not set")
 	}
 
@@ -166,7 +176,11 @@ func run(ctx context.Context, cfg config) error {
 		return err
 	}
 	if cfg.options.force {
-		fmt.Fprintln(cfg.errOut, "commitell: warning: --force bypasses local secret checks and may send sensitive content to the selected model")
+		if cfg.options.offline {
+			fmt.Fprintln(cfg.errOut, "commitell: warning: --force bypasses local secret checks")
+		} else {
+			fmt.Fprintln(cfg.errOut, "commitell: warning: --force bypasses local secret checks and may send sensitive content to the selected model")
+		}
 	}
 	if cfg.options.autoModel {
 		resolved, err := autoSelectModels(ctx, cfg)
@@ -194,6 +208,13 @@ func run(ctx context.Context, cfg config) error {
 		return err
 	}
 	history, _ := gitOutput(root, "log", "-20", "--pretty=format:%s")
+	findings := append([]secretFinding(nil), before.secretFindings...)
+	if !cfg.options.force && !cfg.options.offline {
+		findings = append(findings, detectSecrets([]byte(history), "recent commit history")...)
+	}
+	if err := confirmSecretFindings(cfg, findings); err != nil {
+		return err
+	}
 	snapshots, err := planSnapshots(ctx, cfg, before)
 	if err != nil {
 		return err
@@ -309,10 +330,16 @@ func appendUntracked(dst *bytes.Buffer, root, path string) error {
 	return nil
 }
 
-func scanSecretPaths(paths []string) error {
+type secretFinding struct {
+	Location string
+	Kind     string
+}
+
+func detectSecretPaths(paths []string) []secretFinding {
+	var findings []secretFinding
 	for _, path := range paths {
 		base := strings.ToLower(filepath.Base(path))
-		denied := base == ".env" ||
+		suspicious := base == ".env" ||
 			(strings.HasPrefix(base, ".env.") && base != ".env.example") ||
 			strings.HasSuffix(base, ".pem") ||
 			strings.HasSuffix(base, ".key") ||
@@ -326,20 +353,78 @@ func scanSecretPaths(paths []string) error {
 			base == ".pypirc" ||
 			base == ".netrc" ||
 			base == "credentials.json"
-		if denied {
-			return fmt.Errorf("refusing to send likely secret file %q", path)
+		if suspicious {
+			findings = append(findings, secretFinding{Location: path, Kind: "sensitive filename"})
 		}
 	}
-	return nil
+	return findings
 }
 
-func scanSecrets(content []byte) error {
+func detectSecrets(content []byte, location string) []secretFinding {
+	var findings []secretFinding
 	for _, pattern := range secretPatterns {
 		if pattern.re.FindIndex(content) != nil {
-			return fmt.Errorf("refusing to send diff containing a likely %s", pattern.name)
+			findings = append(findings, secretFinding{Location: location, Kind: pattern.name})
 		}
 	}
-	return nil
+	return findings
+}
+
+func confirmSecretFindings(cfg config, findings []secretFinding) error {
+	if cfg.options.force || len(findings) == 0 {
+		return nil
+	}
+	findings = uniqueSecretFindings(findings)
+	errOut := cfg.errOut
+	if errOut == nil {
+		errOut = io.Discard
+	}
+	fmt.Fprintln(errOut, "commitell: warning: possible secrets detected:")
+	for _, finding := range findings {
+		fmt.Fprintf(errOut, "  - %s: %s\n", finding.Location, finding.Kind)
+	}
+	if cfg.options.offline {
+		fmt.Fprintln(errOut, "The selected content will be committed locally and may be published by explicit push options.")
+	} else {
+		fmt.Fprintln(errOut, "The selected content may be sent to the configured model provider.")
+	}
+	if !cfg.interactive || cfg.in == nil {
+		return errors.New("possible secrets require confirmation from an interactive terminal; review the findings, then use --exclude or rerun with --force")
+	}
+	fmt.Fprint(errOut, "Continue anyway? [y/N] ")
+	answer, err := bufio.NewReader(cfg.in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("read secret confirmation: %w", err)
+	}
+	answer = strings.TrimSpace(answer)
+	if strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes") {
+		fmt.Fprintln(errOut, "commitell: continuing after secret warning confirmation")
+		return nil
+	}
+	return errors.New("cancelled by user; nothing was sent or committed")
+}
+
+func uniqueSecretFindings(findings []secretFinding) []secretFinding {
+	seen := make(map[string]bool, len(findings))
+	unique := make([]secretFinding, 0, len(findings))
+	for _, finding := range findings {
+		key := finding.Location + "\x00" + finding.Kind
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, finding)
+	}
+	return unique
+}
+
+func isTerminal(reader io.Reader) bool {
+	file, ok := reader.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func truncateUTF8(content []byte, limit int) string {
@@ -354,10 +439,8 @@ func truncateUTF8(content []byte, limit int) string {
 }
 
 func generateMessage(ctx context.Context, cfg config, snap snapshot, history string) (commitMessage, string, error) {
-	if !cfg.options.force {
-		if err := scanSecrets([]byte(history)); err != nil {
-			return commitMessage{}, "", fmt.Errorf("refusing to send recent commit history: %w", err)
-		}
+	if cfg.options.offline {
+		return generateOfflineMessage(snap), "offline", nil
 	}
 	prompt := fmt.Sprintf(`Write one Git commit message for all supplied changes.
 
@@ -393,7 +476,7 @@ CHANGES:
 		failures = append(failures, model+": "+err.Error())
 		fmt.Fprintf(cfg.errOut, "commitell: %s failed; trying fallback\n", model)
 	}
-	return commitMessage{}, "", fmt.Errorf("all ZDR models failed; nothing was staged: %s", strings.Join(failures, "; "))
+	return commitMessage{}, "", fmt.Errorf("all privacy-compatible models failed; nothing was staged (ZDR and denied data collection remained enforced; --force does not change provider privacy): %s", strings.Join(failures, "; "))
 }
 
 func requestMessage(ctx context.Context, cfg config, model, prompt string) (commitMessage, error) {
@@ -426,7 +509,11 @@ func requestContent(ctx context.Context, cfg config, model, prompt string, maxTo
 		},
 		ResponseFormat: map[string]any{"type": "json_object"},
 		Temperature:    0.2,
-		MaxTokens:      maxTokens,
+	}
+	if modelTokenParameter(model) == "max_completion_tokens" {
+		payload.MaxCompletionTokens = maxTokens
+	} else {
+		payload.MaxTokens = maxTokens
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

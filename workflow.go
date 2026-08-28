@@ -27,16 +27,18 @@ type change struct {
 
 type changeSnapshot struct {
 	change
-	status      string
-	diff        string
-	fingerprint string
+	status         string
+	diff           string
+	fingerprint    string
+	secretFindings []secretFinding
 }
 
 type snapshot struct {
-	status      string
-	diff        string
-	fingerprint string
-	changes     []changeSnapshot
+	status         string
+	diff           string
+	fingerprint    string
+	changes        []changeSnapshot
+	secretFindings []secretFinding
 }
 
 type commitGroup struct {
@@ -86,6 +88,7 @@ func captureSnapshot(root string, opts options) (snapshot, error) {
 			return snapshot{}, withExcludeHint(item.Path, err)
 		}
 		result.changes = append(result.changes, entry)
+		result.secretFindings = append(result.secretFindings, entry.secretFindings...)
 		status.WriteString(entry.status)
 		diff.WriteString(entry.diff)
 		io.WriteString(hash, entry.Path+"\x00"+entry.fingerprint+"\x00")
@@ -156,10 +159,9 @@ func applyExcludes(changes []change, excludes []string) ([]change, error) {
 
 func captureChange(root string, item change, opts options) (changeSnapshot, error) {
 	paths := changePaths(item)
+	var findings []secretFinding
 	if !opts.force {
-		if err := scanSecretPaths(paths); err != nil {
-			return changeSnapshot{}, err
-		}
+		findings = append(findings, detectSecretPaths(paths)...)
 	}
 	var fragment bytes.Buffer
 	if item.Untracked {
@@ -186,15 +188,19 @@ func captureChange(root string, item change, opts options) (changeSnapshot, erro
 	status := item.Code + " " + item.Path + "\n"
 	outbound := append([]byte(status), fragment.Bytes()...)
 	if !opts.force {
-		if err := scanSecrets(outbound); err != nil {
-			return changeSnapshot{}, err
-		}
+		findings = append(findings, detectSecrets(outbound, item.Path)...)
 	}
 	fingerprint, err := fingerprintChange(root, item, opts.staged)
 	if err != nil {
 		return changeSnapshot{}, err
 	}
-	return changeSnapshot{change: item, status: status, diff: fragment.String(), fingerprint: fingerprint}, nil
+	return changeSnapshot{
+		change:         item,
+		status:         status,
+		diff:           fragment.String(),
+		fingerprint:    fingerprint,
+		secretFindings: findings,
+	}, nil
 }
 
 func fingerprintChange(root string, item change, staged bool) (string, error) {
@@ -344,7 +350,7 @@ CHANGES:
 		failures = append(failures, model+": "+err.Error())
 		fmt.Fprintf(cfg.errOut, "commitell: %s failed to plan split; trying fallback\n", model)
 	}
-	return nil, fmt.Errorf("all ZDR models failed to plan commits: %s", strings.Join(failures, "; "))
+	return nil, fmt.Errorf("all privacy-compatible models failed to plan commits (ZDR and denied data collection remained enforced; --force does not change provider privacy): %s", strings.Join(failures, "; "))
 }
 
 func validateSplitPlan(plan splitPlan, available []string) error {

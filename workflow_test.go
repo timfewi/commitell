@@ -145,15 +145,23 @@ func TestRunRejectsUnknownExcludeBeforeRequest(t *testing.T) {
 	}
 }
 
-func TestRunSuggestsExcludeForProblemFile(t *testing.T) {
+func TestRunSuggestsExcludeForSecretInNonInteractiveMode(t *testing.T) {
 	server := commitMessageServer(t, "chore: should not happen")
 	defer server.Close()
 	repo := newRepository(t)
 	writeFile(t, filepath.Join(repo, ".env"), "SECRET=value\n")
 
-	err := run(context.Background(), testConfig(repo, server, options{}))
-	if err == nil || !strings.Contains(err.Error(), `Try again with --exclude ".env".`) {
+	var errOut bytes.Buffer
+	cfg := testConfig(repo, server, options{})
+	cfg.errOut = &errOut
+	err := run(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "use --exclude or rerun with --force") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{".env", "sensitive filename"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Fatalf("warning missing %q:\n%s", want, errOut.String())
+		}
 	}
 }
 

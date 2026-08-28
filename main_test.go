@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -46,15 +47,81 @@ func TestCurrentVersionUsesReleaseOverride(t *testing.T) {
 }
 
 func TestSecretDetection(t *testing.T) {
-	if err := scanSecretPaths([]string{"src/main.go", ".env.example"}); err != nil {
-		t.Fatal(err)
+	if findings := detectSecretPaths([]string{"src/main.go", ".env.example"}); len(findings) != 0 {
+		t.Fatalf("safe paths produced findings: %+v", findings)
 	}
-	if err := scanSecretPaths([]string{".env.production"}); err == nil {
+	if findings := detectSecretPaths([]string{".env.production"}); len(findings) == 0 {
 		t.Fatal("accepted secret path")
 	}
 	fakeKey := "sk-or-v1-" + "abcdefghijklmnopqrstuvwxyz"
-	if err := scanSecrets([]byte("+ OPENROUTER_API_KEY=" + fakeKey + "\n")); err == nil {
+	if findings := detectSecrets([]byte("+ OPENROUTER_API_KEY="+fakeKey+"\n"), "test.diff"); len(findings) == 0 {
 		t.Fatal("accepted secret content")
+	}
+}
+
+func TestRunConfirmsFlakeSecretFalsePositive(t *testing.T) {
+	server := commitMessageServer(t, "test: add synthetic secret fixture")
+	defer server.Close()
+	repo := newRepository(t)
+	writeFile(t, filepath.Join(repo, "flake.nix"), "secret = \"fixture-value-123456\"\n")
+
+	cfg := testConfig(repo, server, options{})
+	cfg.in = strings.NewReader("y\n")
+	cfg.interactive = true
+	var errOut bytes.Buffer
+	cfg.errOut = &errOut
+	if err := run(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"flake.nix", "assigned secret", "Continue anyway? [y/N]", "continuing after secret warning confirmation"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Fatalf("confirmation output missing %q:\n%s", want, errOut.String())
+		}
+	}
+	if strings.Contains(errOut.String(), "fixture-value-123456") {
+		t.Fatalf("confirmation output leaked the matched value:\n%s", errOut.String())
+	}
+	if files := git(t, repo, "show", "--pretty=", "--name-only", "HEAD"); files != "flake.nix" {
+		t.Fatalf("confirmed commit files = %q", files)
+	}
+}
+
+func TestRunDeclinesSecretBeforeRequestOrStaging(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		http.Error(w, "request must not be sent", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	repo := newRepository(t)
+	writeFile(t, filepath.Join(repo, "flake.nix"), "secret = \"fixture-value-123456\"\n")
+
+	cfg := testConfig(repo, server, options{})
+	cfg.in = strings.NewReader("n\n")
+	cfg.interactive = true
+	err := run(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "cancelled by user") {
+		t.Fatalf("confirmation error = %v", err)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("declined confirmation made %d model request(s)", got)
+	}
+	if staged := git(t, repo, "diff", "--cached", "--name-only"); staged != "" {
+		t.Fatalf("declined confirmation staged %q", staged)
+	}
+}
+
+func TestSecretConfirmationRequiresInteractiveTerminal(t *testing.T) {
+	var errOut bytes.Buffer
+	err := confirmSecretFindings(config{in: strings.NewReader("y\n"), errOut: &errOut}, []secretFinding{{
+		Location: "flake.nix",
+		Kind:     "assigned secret",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "interactive terminal") {
+		t.Fatalf("non-interactive confirmation error = %v", err)
+	}
+	if !strings.Contains(errOut.String(), "flake.nix") {
+		t.Fatalf("non-interactive warning missing finding:\n%s", errOut.String())
 	}
 }
 
@@ -72,7 +139,7 @@ func TestRunForceBypassesLocalSecretChecks(t *testing.T) {
 	}
 }
 
-func TestRunUsesPrivateFallbackAndCommitsEverything(t *testing.T) {
+func TestRunUsesPrivateFastFallbacksAndCommitsEverything(t *testing.T) {
 	var (
 		mu       sync.Mutex
 		requests []chatRequest
@@ -87,8 +154,8 @@ func TestRunUsesPrivateFallbackAndCommitsEverything(t *testing.T) {
 		mu.Lock()
 		requests = append(requests, request)
 		mu.Unlock()
-		if request.Model == models[0] {
-			http.Error(w, "primary unavailable", http.StatusServiceUnavailable)
+		if request.Model != models[len(models)-1] {
+			http.Error(w, "fast model unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -132,15 +199,22 @@ func TestRunUsesPrivateFallbackAndCommitsEverything(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(requests) != 2 {
-		t.Fatalf("got %d model requests, want 2", len(requests))
+	if len(requests) != len(models) {
+		t.Fatalf("got %d model requests, want %d", len(requests), len(models))
 	}
-	if requests[1].Model != models[1] {
-		t.Fatalf("fallback model = %q, want %q", requests[1].Model, models[1])
-	}
-	for _, request := range requests {
-		if !request.Provider.ZDR || request.Provider.DataCollection != "deny" {
+	for index, request := range requests {
+		if request.Model != models[index] {
+			t.Fatalf("fallback %d = %q, want %q", index, request.Model, models[index])
+		}
+		if !request.Provider.ZDR || request.Provider.DataCollection != "deny" || !request.Provider.RequireParams {
 			t.Fatalf("privacy policy missing: %+v", request.Provider)
+		}
+		if strings.HasPrefix(request.Model, "openai/") {
+			if request.MaxCompletionTokens == 0 || request.MaxTokens != 0 {
+				t.Fatalf("OpenAI token limits are incompatible: %+v", request)
+			}
+		} else if request.MaxTokens == 0 || request.MaxCompletionTokens != 0 {
+			t.Fatalf("model token limits are incompatible: %+v", request)
 		}
 	}
 }
