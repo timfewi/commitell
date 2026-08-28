@@ -5,13 +5,19 @@
 [![CI](https://github.com/timfewi/commitell/actions/workflows/ci.yml/badge.svg)](https://github.com/timfewi/commitell/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`commitell` turns Git changes into one or more AI-written, DCO-signed commits.
-With no options it preserves the original workflow and commits the complete
-dirty working tree.
+`commitell` turns Git changes into one or more DCO-signed commits with
+model-written or deterministic local messages. With no options it preserves
+the original workflow and commits the complete dirty working tree.
 
 ```sh
 export OPENROUTER_API_KEY=sk-or-v1-...
 commitell
+```
+
+For a provider-free commit message with no model API request or API key:
+
+```sh
+commitell --offline
 ```
 
 Select, split, and publish changes when needed:
@@ -34,7 +40,8 @@ commitell --models --eu
 ```
 
 `--models --eu` and commit runs with `--eu` use OpenRouter's EU in-region
-routing. This is a routing property, not a legal GDPR certification.
+routing when it is enabled for the account. This is a routing property, not a
+legal GDPR certification.
 
 ## Options
 
@@ -49,6 +56,9 @@ routing. This is a routing property, not a legal GDPR certification.
 - `--auto-model` discovers the models available to the API key and selects
   compatible ZDR models with at least 128k context. It keeps commitell's
   preferred models first, then ranks fallbacks by context window and price.
+- `--offline` generates a conservative Conventional Commit message locally
+  without contacting OpenRouter or any model API. It needs no API key and
+  cannot be combined with model selection, `--eu`, or model-driven `--split`.
 - `--dry-run` generates and prints the plan without changing Git or publishing.
 - `--eu` routes model discovery and completions through `eu.openrouter.ai`.
 - `--push` pushes the current branch after all commits succeed.
@@ -60,30 +70,57 @@ routing. This is a routing property, not a legal GDPR certification.
 - `--remote NAME` selects the publishing remote; the default is `origin`.
 - `--base BRANCH` declares the protected default and pull-request base branch.
 
-If a changed file cannot safely be read or contains a likely secret, commitell
-stops before an API request and names the file:
+Every option has a short form shown by `commitell --help`. Boolean short
+options can be clustered, so `commitell -scd` is equivalent to
+`commitell --staged --split --dry-run`. Value-taking options such as `-m`
+must be separate or last in a cluster.
+
+If a changed file cannot safely be read, commitell stops and names the file.
+When the local scanner finds a possible secret, commitell shows only its
+location and detection type, then asks before any model request or staging:
 
 ```text
-Try again with --exclude "path/to/file".
+Continue anyway? [y/N]
 ```
 
-Files are never excluded automatically.
+Answer `y` to proceed. Answer `n` or press Enter to cancel without staging or
+sending the content. Non-interactive runs fail closed; review the finding and
+use `--exclude` or the explicit `--force` override. Matched secret values are
+not printed, and files are never excluded automatically. This warning flow also
+covers harmless fixtures such as test values in `flake.nix`.
 
 ## Privacy
+
+For the strongest privacy guarantee, use `commitell --offline`. It creates the
+message from local file status only, makes no OpenRouter or model API request,
+and does not require `OPENROUTER_API_KEY`. The result is intentionally more
+conservative than a model-written message. Explicit `--push` or `--pr` still
+sends commits to the configured Git remote; offline mode only guarantees that
+no model provider receives the diff.
 
 Every OpenRouter completion request requires both Zero Data Retention and
 denied data collection. The default model order is:
 
 1. `google/gemini-3.1-flash-lite`
-2. `qwen/qwen3-coder-30b-a3b-instruct`
+2. `google/gemini-2.5-flash-lite`
+3. `openai/gpt-4o-mini`
+
+These model IDs are availability, context, quality, and cost preferences, not
+the privacy trust boundary. OpenRouter may select or fall back between provider
+endpoints only when they satisfy the request's ZDR, denied-data-collection, and
+required-parameter constraints. If none qualify, the request fails rather than
+relaxing a privacy constraint. `--force` never changes ZDR or provider privacy;
+it only bypasses local likely-secret checks and controls protected-branch
+publishing.
 
 Repeated `--model` (or legacy `--solver`) flags replace this order. Use
 `--auto-model` to discover and rank compatible account models automatically.
-If no selected model is available under the required policies, `commitell`
-stops before staging anything. It rejects common secret filenames and token
-patterns locally, omits binary contents, and sends only a bounded diff plus
-recent commit subjects. `--force` is the explicit override for the local
-likely-secret checks.
+If all three fast defaults are unavailable under the required policies,
+`commitell` stops before staging anything; `commitell --offline` remains the
+provider-independent fallback. The local scanner flags common secret filenames
+and token patterns for confirmation, binary contents are omitted, and only a
+bounded diff plus recent commit subjects is sent. `--force` is the explicit
+override for the local likely-secret confirmation.
 
 `--models` obtains the account-filtered list from OpenRouter and intersects it
 with current ZDR endpoints. OpenRouter applies the API key's account privacy
@@ -93,7 +130,9 @@ guardrail details or require a management key.
 The local scanner is deliberately conservative, but it is not a complete
 secret-management system. OpenRouter still processes the request and retains
 request metadata under its published policy even when prompt retention is
-disabled.
+disabled. Committell cannot inspect or override OpenRouter's account-level
+Private Input & Output Logging or OpenRouter Use of Inputs/Outputs opt-ins; keep
+both disabled for private cloud use.
 
 ## Install
 
@@ -143,8 +182,9 @@ environment.systemPackages = [
 ];
 ```
 
-`commitell` reads `OPENROUTER_API_KEY` from the environment. Do not put the key
-in a Nix expression — string literals end up world-readable in `/nix/store`.
+Except in `--offline` mode, `commitell` reads `OPENROUTER_API_KEY` from the
+environment. Do not put the key in a Nix expression — string literals end up
+world-readable in `/nix/store`.
 Wrap the package instead and read the secret at runtime, for example from
 [agenix](https://github.com/ryantm/agenix):
 
@@ -165,7 +205,7 @@ Before changing the index, `commitell`:
 
 - rejects merge conflicts and in-progress Git operations;
 - checks `user.name` and `user.email`;
-- scans the outbound text for likely secrets;
+- scans the outbound text for likely secrets and asks before proceeding;
 - generates and validates a subject with an optional body;
 - verifies that the working tree did not change during analysis.
 
@@ -190,17 +230,27 @@ PR preflight checks `gh auth status`; commitell then pushes itself and invokes
 
 ## Development
 
+Make remains the authoritative build and CI interface:
+
 ```sh
 make check
 make nix-check
 ```
 
-With Nix, `nix develop` provides Go, gopls, Git, GitHub CLI, Make, and nixfmt;
-`nix build` runs the tests as part of the build and wraps the installed program
-with its `git` and `gh` runtime dependencies. `direnv allow` activates the same
-environment automatically through `.envrc`. Editors supporting Dev Containers
-can open `.devcontainer/devcontainer.json` for an equivalent Go 1.26
-environment.
+The Justfile provides short, discoverable wrappers for local development:
+
+```sh
+just --list
+just check
+just help
+```
+
+With Nix, `nix develop` provides Go, gopls, Git, GitHub CLI, Make, Just, and
+nixfmt; `nix build` runs the tests as part of the build and wraps the installed
+program with its `git` and `gh` runtime dependencies. `direnv allow` activates
+the same environment automatically through `.envrc`. Editors supporting Dev
+Containers can open `.devcontainer/devcontainer.json` for an equivalent Go
+1.26 environment.
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
 project rules. Maintainers can use [RELEASE.md](RELEASE.md) for the release and
