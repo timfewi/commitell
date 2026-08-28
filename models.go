@@ -19,7 +19,16 @@ const (
 	openRouterEUBaseURL = "https://eu.openrouter.ai/api/v1"
 )
 
-var requiredModelParameters = []string{"temperature", "max_tokens", "response_format"}
+func requiredModelParameters(modelID string) []string {
+	return []string{"temperature", modelTokenParameter(modelID), "response_format"}
+}
+
+func modelTokenParameter(modelID string) string {
+	if strings.HasPrefix(modelID, "openai/") {
+		return "max_completion_tokens"
+	}
+	return "max_tokens"
+}
 
 type modelArchitecture struct {
 	InputModalities  []string `json:"input_modalities"`
@@ -201,7 +210,7 @@ func getJSON(ctx context.Context, cfg config, endpoint string, dst any) error {
 func intersectModels(userModels []userModel, endpoints []zdrEndpoint) []compatibleModel {
 	byModel := make(map[string][]zdrEndpoint)
 	for _, endpoint := range endpoints {
-		if endpoint.ModelID != "" && supportsAll(endpoint.SupportedParameters, requiredModelParameters) {
+		if endpoint.ModelID != "" {
 			byModel[endpoint.ModelID] = append(byModel[endpoint.ModelID], endpoint)
 		}
 	}
@@ -211,8 +220,17 @@ func intersectModels(userModels []userModel, endpoints []zdrEndpoint) []compatib
 	}
 	var result []compatibleModel
 	for _, model := range userModels {
-		available := byModel[model.ID]
-		if len(available) == 0 || !supportsAll(model.SupportedParameters, requiredModelParameters) || !contains(model.Architecture.InputModalities, "text") || !contains(model.Architecture.OutputModalities, "text") {
+		required := requiredModelParameters(model.ID)
+		if !supportsAll(model.SupportedParameters, required) || !contains(model.Architecture.InputModalities, "text") || !contains(model.Architecture.OutputModalities, "text") {
+			continue
+		}
+		var available []zdrEndpoint
+		for _, endpoint := range byModel[model.ID] {
+			if supportsAll(endpoint.SupportedParameters, required) {
+				available = append(available, endpoint)
+			}
+		}
+		if len(available) == 0 {
 			continue
 		}
 		contextLength := model.ContextLength

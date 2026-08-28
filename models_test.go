@@ -101,3 +101,25 @@ func TestAutoSelectModelsRanksCompatibleLargeContextModels(t *testing.T) {
 		t.Fatalf("automatic model order = %q", got)
 	}
 }
+
+func TestIntersectModelsAcceptsOpenAICompletionTokenParameter(t *testing.T) {
+	compatible := intersectModels(
+		[]userModel{{
+			ID:            "openai/gpt-4o-mini",
+			ContextLength: 128000,
+			Architecture: modelArchitecture{
+				InputModalities:  []string{"text"},
+				OutputModalities: []string{"text"},
+			},
+			SupportedParameters: []string{"temperature", "max_tokens", "max_completion_tokens", "response_format"},
+		}},
+		[]zdrEndpoint{{
+			ModelID:             "openai/gpt-4o-mini",
+			ContextLength:       128000,
+			SupportedParameters: []string{"temperature", "max_completion_tokens", "response_format"},
+		}},
+	)
+	if len(compatible) != 1 || compatible[0].ID != "openai/gpt-4o-mini" || !compatible[0].Default {
+		t.Fatalf("compatible models = %+v", compatible)
+	}
+}
