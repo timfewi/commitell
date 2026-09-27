@@ -20,6 +20,9 @@ vet:
 	go vet ./...
 
 nix-check:
+	deadnix --fail .
+	statix check .
+	nix fmt -- --ci
 	nix flake check
 
 release-check: check nix-check

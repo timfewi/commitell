@@ -234,7 +234,7 @@ Make remains the authoritative build and CI interface:
 
 ```sh
 make check
-make nix-check
+nix develop path:. --command make nix-check
 ```
 
 The Justfile provides short, discoverable wrappers for local development:
@@ -245,12 +245,12 @@ just check
 just help
 ```
 
-With Nix, `nix develop` provides Go, gopls, Git, GitHub CLI, Make, Just, and
-nixfmt; `nix build` runs the tests as part of the build and wraps the installed
-program with its `git` and `gh` runtime dependencies. `direnv allow` activates
-the same environment automatically through `.envrc`. Editors supporting Dev
-Containers can open `.devcontainer/devcontainer.json` for an equivalent Go
-1.26 environment.
+With Nix, `nix develop` provides Go, gopls, Git, GitHub CLI, Make, Just, nixfmt,
+deadnix, and statix; `nix build` runs the tests as part of the build and wraps
+the installed program with its `git` and `gh` runtime dependencies.
+`direnv allow` activates the same environment automatically through `.envrc`.
+Editors supporting Dev Containers can open `.devcontainer/devcontainer.json`
+for an equivalent Go 1.26 environment.
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
 project rules. Maintainers can use [RELEASE.md](RELEASE.md) for the release and

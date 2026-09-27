@@ -7,13 +7,14 @@ Before submitting:
 
 ```sh
 make check
-make nix-check
+nix develop path:. --command make nix-check
 ```
 
-`make check` verifies formatting, runs the test suite with the race detector,
-and runs `go vet`. `make nix-check` evaluates and builds the supported flake
-outputs. If Nix is not installed, run `go test -race ./...` and `go vet ./...`
-and let the Nix CI job cover the package build.
+`make check` verifies Go formatting, runs the test suite with the race detector,
+and runs `go vet`. `make nix-check` checks Nix formatting and lint, then
+evaluates and builds the supported flake outputs. If Nix is not installed, run
+`go test -race ./...` and `go vet ./...` and let the Nix CI job cover the package
+build.
 
 Keep changes focused and sign every commit for DCO compliance:
 

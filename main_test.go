@@ -254,6 +254,7 @@ func newRepository(t *testing.T) string {
 	git(t, repo, "init", "-q")
 	git(t, repo, "config", "user.name", "Test User")
 	git(t, repo, "config", "user.email", "test@example.com")
+	git(t, repo, "config", "core.excludesFile", os.DevNull)
 	writeFile(t, filepath.Join(repo, "tracked.txt"), "initial\n")
 	git(t, repo, "add", "tracked.txt")
 	git(t, repo, "commit", "-q", "-m", "chore: initial")

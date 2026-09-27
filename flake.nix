@@ -65,6 +65,8 @@
             pkgs.gnumake
             pkgs.just
             pkgs.nixfmt-tree
+            pkgs.deadnix
+            pkgs.statix
           ];
 
           shellHook = ''
