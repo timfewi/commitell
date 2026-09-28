@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "checks": [
+    {
+      "name": "go-check",
+      "argv": ["nix", "develop", "--no-write-lock-file", "path:.", "--command", "make", "check"],
+      "requires": ["nix"],
+      "timeout_seconds": 900,
+      "profiles": ["fast", "full"]
+    },
+    {
+      "name": "nix-check",
+      "argv": ["nix", "develop", "--no-write-lock-file", "path:.", "--command", "make", "nix-check"],
+      "requires": ["nix"],
+      "timeout_seconds": 1800,
+      "profiles": ["full"]
+    }
+  ],
+  "watch_ignore": [".direnv", "result", "result-*"]
+}

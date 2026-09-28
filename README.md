@@ -233,9 +233,15 @@ PR preflight checks `gh auth status`; commitell then pushes itself and invokes
 Make remains the authoritative build and CI interface:
 
 ```sh
-make check
-nix develop path:. --command make nix-check
+project-check fast
+project-check full
 ```
+
+The workspace checks run `make check` and `make nix-check` in the pinned Nix
+development shell. For direct use, run `nix develop path:. --command make check`;
+the race-enabled Go tests require a C compiler. The Nix gate evaluates all
+three declared systems and builds the current system's package. CI still calls
+Make directly.
 
 The Justfile provides short, discoverable wrappers for local development:
 
