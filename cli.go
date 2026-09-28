@@ -129,9 +129,9 @@ func parseOptions(args []string) (options, error) {
 	set.Var(excludeValue, "exclude", "exclude repository-relative files")
 	set.Var(excludeValue, "x", "exclude repository-relative files")
 	modelValue := listValue{values: &opts.solvers}
-	set.Var(modelValue, "solver", "OpenRouter model to try, in fallback order (alias: --model)")
-	set.Var(modelValue, "model", "OpenRouter model to try, in fallback order")
-	set.Var(modelValue, "m", "OpenRouter model to try, in fallback order")
+	set.Var(modelValue, "solver", "model to try, in fallback order (alias: --model)")
+	set.Var(modelValue, "model", "model to try, in fallback order")
+	set.Var(modelValue, "m", "model to try, in fallback order")
 	boolFlag(&opts.autoModel, "auto-model", "a", "select compatible OpenRouter models automatically")
 	boolFlag(&opts.offline, "offline", "o", "generate commit messages locally without a model API request")
 	boolFlag(&opts.split, "split", "c", "split changes into logical commits")
@@ -203,8 +203,9 @@ func usage(w io.Writer) {
   commitell [options]
 
 Create one or more DCO-signed Git commits. By default, commitell analyzes the
-complete dirty working tree with a fast privacy-compatible OpenRouter model,
-then stages and commits all changes only after a valid message is ready.
+complete dirty working tree with a fast model from the configured provider
+(OpenRouter unless COMMITELL_PROVIDER says otherwise), then stages and commits
+all changes only after a valid message is ready.
 
 Change selection:
   -s, --staged           Commit only changes already in the Git index.
@@ -216,12 +217,14 @@ Models and privacy:
   -m, --model MODEL      Model to try. Repeat to define the complete fallback
                          order. --solver is a legacy alias and also uses -m.
   -a, --auto-model       Discover and rank account-compatible ZDR models.
-  -o, --offline          Generate a conservative message locally. No API key,
-                         OpenRouter call, or model provider is involved.
+                         OpenRouter only.
+  -o, --offline          Generate a conservative message locally. No API key
+                         or model provider is involved.
   -e, --eu               Use OpenRouter EU in-region routing when enabled for
-                         the account.
+                         the account. OpenRouter only.
   -l, --models           List account-, guardrail-, parameter-, and
                          ZDR-compatible models. May be combined only with --eu.
+                         OpenRouter only.
 
 Preview and publishing:
   -d, --dry-run          Print the commit and publish plan without changing Git.
@@ -247,9 +250,15 @@ Common use cases:
     commitell --offline
     commitell -o
 
-  Use the fast private default fallback order:
+  Use the fast private OpenRouter default fallback order:
     commitell
     # Gemini 3.1 Flash Lite -> Gemini 2.5 Flash Lite -> GPT-4o mini
+
+  Use another OpenAI-compatible provider:
+    COMMITELL_PROVIDER=opencode-go commitell
+    COMMITELL_PROVIDER=openai-compatible \
+      COMMITELL_BASE_URL=http://localhost:11434/v1 \
+      COMMITELL_MODELS=qwen3:8b commitell
 
   Preview staged changes without committing:
     commitell --staged --dry-run
@@ -277,6 +286,7 @@ Common use cases:
 Privacy and safety:
   Every OpenRouter request enforces ZDR, denied provider data collection, and
   required parameter support. --force never relaxes these provider rules.
+  Other providers receive no such policy; their own data policy applies.
   Likely-secret matches are shown by location and type, then require a y/N
   confirmation before any model request or staging. Non-interactive runs fail
   closed; use --exclude or the explicit --force override after reviewing the
@@ -284,6 +294,14 @@ Privacy and safety:
   commit must work without a model provider. Normal Git hooks still run.
 
 Environment:
-  OPENROUTER_API_KEY     Required except with --offline.
+  COMMITELL_PROVIDER     openrouter (default), opencode-go, or
+                         openai-compatible.
+  OPENROUTER_API_KEY     Key for openrouter. Required except with --offline.
+  OPENCODE_GO_API_KEY    Key for opencode-go (default model glm-5.3-flash).
+  COMMITELL_API_KEY      Key for openai-compatible.
+  COMMITELL_BASE_URL     API base for openai-compatible, without
+                         /chat/completions.
+  COMMITELL_MODELS       Comma-separated default fallback order; required for
+                         openai-compatible unless --model is given.
 `)
 }

@@ -46,6 +46,52 @@ func TestCurrentVersionUsesReleaseOverride(t *testing.T) {
 	}
 }
 
+func TestOpenCodeGoRequestUsesItsModelAndOmitsOpenRouterPolicy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" || r.Header.Get("Authorization") != "Bearer test-key" || r.Header.Get("x-opencode-session") != "test-session" || !strings.HasPrefix(r.Header.Get("User-Agent"), "commitell/") {
+			t.Errorf("unexpected OpenCode Go request: path=%q headers=%v", r.URL.Path, r.Header)
+		}
+		var payload map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		if _, ok := payload["provider"]; ok {
+			t.Error("OpenRouter provider policy was sent to OpenCode Go")
+		}
+		var model string
+		if err := json.Unmarshal(payload["model"], &model); err != nil || model != "glm-5.3-flash" {
+			t.Errorf("model = %q, error = %v", model, err)
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"subject\":\"test: use OpenCode Go\",\"body\":\"\"}"}}]}`)
+	}))
+	defer server.Close()
+
+	cfg := config{
+		apiKey:    "test-key",
+		endpoint:  server.URL + "/chat/completions",
+		provider:  openCodeGoProvider,
+		sessionID: "test-session",
+		client:    server.Client(),
+	}
+	if got := configuredModels(cfg); len(got) != 1 || got[0] != "glm-5.3-flash" {
+		t.Fatalf("OpenCode Go models = %v", got)
+	}
+	content, err := requestContent(context.Background(), cfg, configuredModels(cfg)[0], "synthetic diff", 800)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message, err := parseCommitMessage(content); err != nil || message.Subject != "test: use OpenCode Go" {
+		t.Fatalf("message = %+v, error = %v", message, err)
+	}
+}
+
+func TestOpenCodeGoRequiresItsOwnKey(t *testing.T) {
+	err := run(context.Background(), config{provider: openCodeGoProvider})
+	if err == nil || !strings.Contains(err.Error(), "OPENCODE_GO_API_KEY") {
+		t.Fatalf("missing key error = %v", err)
+	}
+}
+
 func TestSecretDetection(t *testing.T) {
 	if findings := detectSecretPaths([]string{"src/main.go", ".env.example"}); len(findings) != 0 {
 		t.Fatalf("safe paths produced findings: %+v", findings)

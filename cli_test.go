@@ -165,6 +165,26 @@ func TestUsageExplainsOptionsPrivacyAndUseCases(t *testing.T) {
 	}
 }
 
+func TestUsageDocumentsEveryProvider(t *testing.T) {
+	var out bytes.Buffer
+	usage(&out)
+	for _, want := range []string{
+		"COMMITELL_PROVIDER",
+		"opencode-go",
+		"openai-compatible",
+		"OPENCODE_GO_API_KEY",
+		"glm-5.3-flash",
+		"COMMITELL_API_KEY",
+		"COMMITELL_BASE_URL",
+		"COMMITELL_MODELS",
+		"Other providers receive no such policy",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("help output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestParseOptionsRejectsUnsafeExclude(t *testing.T) {
 	for _, path := range []string{"/tmp/file", "../file", ""} {
 		if _, err := parseOptions([]string{"--exclude", path}); err == nil {

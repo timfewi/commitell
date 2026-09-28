@@ -350,6 +350,9 @@ CHANGES:
 		failures = append(failures, model+": "+err.Error())
 		fmt.Fprintf(cfg.errOut, "commitell: %s failed to plan split; trying fallback\n", model)
 	}
+	if service := cfg.service(); !service.openRouter {
+		return nil, fmt.Errorf("all %s models failed to plan commits: %s", service.name, strings.Join(failures, "; "))
+	}
 	return nil, fmt.Errorf("all privacy-compatible models failed to plan commits (ZDR and denied data collection remained enforced; --force does not change provider privacy): %s", strings.Join(failures, "; "))
 }
 

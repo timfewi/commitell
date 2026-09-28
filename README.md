@@ -134,6 +134,29 @@ disabled. Committell cannot inspect or override OpenRouter's account-level
 Private Input & Output Logging or OpenRouter Use of Inputs/Outputs opt-ins; keep
 both disabled for private cloud use.
 
+### Model providers
+
+Commitell talks to any service that implements the OpenAI chat-completions API.
+`COMMITELL_PROVIDER` selects it:
+
+| `COMMITELL_PROVIDER` | Endpoint | API key variable | Default models |
+| --- | --- | --- | --- |
+| `openrouter` (default) | OpenRouter | `OPENROUTER_API_KEY` | the order above |
+| `opencode-go` | [OpenCode Go](https://opencode.ai) | `OPENCODE_GO_API_KEY` | `glm-5.3-flash` |
+| `openai-compatible` | `COMMITELL_BASE_URL` | `COMMITELL_API_KEY` | none |
+
+`COMMITELL_BASE_URL` is the API base without `/chat/completions`, for example
+`http://localhost:11434/v1` for a local server; it is accepted only with
+`openai-compatible`. `COMMITELL_MODELS` takes a comma-separated fallback order
+that replaces any provider's defaults, and repeated `--model` flags replace
+both. `openai-compatible` has no defaults, so one of the two is required.
+
+Only OpenRouter requests carry the Zero Data Retention and
+denied-data-collection policy described above; for every other provider its own
+data policy governs the diff. The OpenRouter-only `--models`, `--auto-model`
+and `--eu` options are refused for other providers. `--offline`, the local
+secret scanner and all Git behavior are the same for every provider.
+
 ## Install
 
 Requires Go 1.26+ and Git:

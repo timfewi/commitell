@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -54,6 +56,8 @@ type config struct {
 	apiKey      string
 	endpoint    string
 	apiBase     string
+	provider    provider
+	sessionID   string
 	client      *http.Client
 	in          io.Reader
 	out         io.Writer
@@ -69,13 +73,13 @@ type commitMessage struct {
 }
 
 type chatRequest struct {
-	Model               string         `json:"model"`
-	Messages            []chatMessage  `json:"messages"`
-	Provider            providerPolicy `json:"provider"`
-	ResponseFormat      map[string]any `json:"response_format"`
-	Temperature         float64        `json:"temperature"`
-	MaxTokens           int            `json:"max_tokens,omitempty"`
-	MaxCompletionTokens int            `json:"max_completion_tokens,omitempty"`
+	Model               string          `json:"model"`
+	Messages            []chatMessage   `json:"messages"`
+	Provider            *providerPolicy `json:"provider,omitempty"`
+	ResponseFormat      map[string]any  `json:"response_format"`
+	Temperature         float64         `json:"temperature"`
+	MaxTokens           int             `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
 }
 
 type chatMessage struct {
@@ -113,14 +117,33 @@ func main() {
 		fmt.Println("commitell", currentVersion())
 		return
 	}
-	base := openRouterBaseURL
+	selected, err := resolveProvider(os.Getenv)
+	if err == nil {
+		err = checkProviderOptions(selected, opts)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "commitell:", err)
+		os.Exit(2)
+	}
+	sessionID := ""
+	if selected.session {
+		id := make([]byte, 16)
+		if _, err := rand.Read(id); err != nil {
+			fmt.Fprintf(os.Stderr, "commitell: create %s session ID: %v\n", selected.name, err)
+			os.Exit(1)
+		}
+		sessionID = hex.EncodeToString(id)
+	}
+	base := selected.baseURL
 	if opts.eu {
 		base = openRouterEUBaseURL
 	}
 	cfg := config{
-		apiKey:      os.Getenv("OPENROUTER_API_KEY"),
+		apiKey:      os.Getenv(selected.keyEnv),
 		apiBase:     base,
 		endpoint:    base + "/chat/completions",
+		provider:    selected,
+		sessionID:   sessionID,
 		client:      &http.Client{Timeout: 30 * time.Second},
 		in:          os.Stdin,
 		out:         os.Stdout,
@@ -164,7 +187,10 @@ func run(ctx context.Context, cfg config) error {
 		return errors.New("--offline cannot be combined with --auto-model, --model, --solver, --eu, or --split")
 	}
 	if !cfg.options.offline && strings.TrimSpace(cfg.apiKey) == "" {
-		return errors.New("OPENROUTER_API_KEY is not set")
+		return fmt.Errorf("%s is not set", cfg.service().keyEnv)
+	}
+	if !cfg.options.offline && !cfg.options.autoModel && len(configuredModels(cfg)) == 0 {
+		return errors.New("no model configured; set COMMITELL_MODELS or pass --model")
 	}
 
 	rootBytes, err := gitOutput(cfg.dir, "rev-parse", "--show-toplevel")
@@ -476,6 +502,9 @@ CHANGES:
 		failures = append(failures, model+": "+err.Error())
 		fmt.Fprintf(cfg.errOut, "commitell: %s failed; trying fallback\n", model)
 	}
+	if service := cfg.service(); !service.openRouter {
+		return commitMessage{}, "", fmt.Errorf("all %s models failed; nothing was staged: %s", service.name, strings.Join(failures, "; "))
+	}
 	return commitMessage{}, "", fmt.Errorf("all privacy-compatible models failed; nothing was staged (ZDR and denied data collection remained enforced; --force does not change provider privacy): %s", strings.Join(failures, "; "))
 }
 
@@ -491,24 +520,27 @@ func configuredModels(cfg config) []string {
 	if len(cfg.models) != 0 {
 		return cfg.models
 	}
-	return models
+	return cfg.service().models
 }
 
 func requestContent(ctx context.Context, cfg config, model, prompt string, maxTokens int) (string, error) {
+	service := cfg.service()
 	payload := chatRequest{
 		Model: model,
 		Messages: []chatMessage{
 			{Role: "system", Content: "You write accurate Git commit messages from repository diffs."},
 			{Role: "user", Content: prompt},
 		},
-		Provider: providerPolicy{
+		ResponseFormat: map[string]any{"type": "json_object"},
+		Temperature:    0.2,
+	}
+	if service.openRouter {
+		payload.Provider = &providerPolicy{
 			ZDR:            true,
 			DataCollection: "deny",
 			AllowFallbacks: true,
 			RequireParams:  true,
-		},
-		ResponseFormat: map[string]any{"type": "json_object"},
-		Temperature:    0.2,
+		}
 	}
 	if modelTokenParameter(model) == "max_completion_tokens" {
 		payload.MaxCompletionTokens = maxTokens
@@ -526,6 +558,10 @@ func requestContent(ctx context.Context, cfg config, model, prompt string, maxTo
 	req.Header.Set("Authorization", "Bearer "+cfg.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Title", "commitell")
+	req.Header.Set("User-Agent", "commitell/"+currentVersion())
+	if service.session {
+		req.Header.Set("x-opencode-session", cfg.sessionID)
+	}
 
 	response, err := cfg.client.Do(req)
 	if err != nil {
@@ -534,14 +570,14 @@ func requestContent(ctx context.Context, cfg config, model, prompt string, maxTo
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 512))
-		return "", fmt.Errorf("OpenRouter returned %s: %s", response.Status, strings.TrimSpace(string(detail)))
+		return "", fmt.Errorf("%s returned %s: %s", service.name, response.Status, strings.TrimSpace(string(detail)))
 	}
 	var decoded chatResponse
 	if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil {
-		return "", fmt.Errorf("decode OpenRouter response: %w", err)
+		return "", fmt.Errorf("decode %s response: %w", service.name, err)
 	}
 	if len(decoded.Choices) == 0 {
-		return "", errors.New("OpenRouter returned no choices")
+		return "", fmt.Errorf("%s returned no choices", service.name)
 	}
 	return decoded.Choices[0].Message.Content, nil
 }
