@@ -3,3 +3,4 @@
 /.direnv/
 /graphify-out/
 /docs/refactoring/god-files-extraction-plan.md
+.ast-index/
