@@ -1,7 +1,7 @@
 # Working on commitell
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and [README.md](README.md) before
-editing. The Makefile and CI workflow own the checks; the workspace manifest
+editing. The Makefile owns the checks; the workspace manifest
 only runs those commands in the pinned Nix development shell.
 
 - Keep test Git repositories disposable and model requests local to test HTTP

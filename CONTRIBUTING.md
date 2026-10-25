@@ -13,8 +13,8 @@ nix develop path:. --command make nix-check
 `make check` verifies Go formatting, runs the test suite with the race detector,
 and runs `go vet`. `make nix-check` checks Nix formatting and lint, evaluates
 the flake on all supported systems, and builds the current system's package. If
-Nix is not installed, run `go test -race ./...` and `go vet ./...` and let the
-Nix CI job cover the package build.
+Nix is not installed, run `go test -race ./...` and `go vet ./...`; the package
+build is then checked with `make nix-check` before merging.
 
 Keep changes focused and sign every commit for DCO compliance:
 

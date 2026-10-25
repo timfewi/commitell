@@ -12,7 +12,7 @@ Releases use semantic version tags such as `v0.2.0`. The version in
    make release-check
    ```
 
-3. Commit the release changes with a DCO sign-off and wait for CI on `main`:
+3. Commit the release changes with a DCO sign-off:
 
    ```sh
    git commit -s
@@ -33,9 +33,8 @@ Releases use semantic version tags such as `v0.2.0`. The version in
    git push origin v0.2.0
    ```
 
-The release workflow rejects a tag that does not match the Nix package
-version. It reruns the Go and Nix checks, builds Linux amd64/arm64 and Darwin
-arm64 archives, writes SHA-256 checksums, and creates the GitHub release.
+There is no hosted release workflow. The pushed tag is the source release that
+Nixpkgs builds from; no binary archives are published.
 
 ## Submit to Nixpkgs
 

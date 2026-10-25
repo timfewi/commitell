@@ -2,7 +2,6 @@
 
 # commitell
 
-[![CI](https://github.com/timfewi/commitell/actions/workflows/ci.yml/badge.svg)](https://github.com/timfewi/commitell/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 `commitell` turns Git changes into one or more DCO-signed commits with
@@ -253,7 +252,7 @@ PR preflight checks `gh auth status`; commitell then pushes itself and invokes
 
 ## Development
 
-Make remains the authoritative build and CI interface:
+Make remains the authoritative build interface:
 
 ```sh
 project-check fast
@@ -263,8 +262,7 @@ project-check full
 The workspace checks run `make check` and `make nix-check` in the pinned Nix
 development shell. For direct use, run `nix develop path:. --command make check`;
 the race-enabled Go tests require a C compiler. The Nix gate evaluates all
-three declared systems and builds the current system's package. CI still calls
-Make directly.
+three declared systems and builds the current system's package.
 
 The Justfile provides short, discoverable wrappers for local development:
 
