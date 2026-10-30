@@ -6,8 +6,8 @@ pull request.
 Before submitting:
 
 ```sh
-nix develop path:. --command make check
-nix develop path:. --command make nix-check
+nix develop . --command make check
+nix develop . --command make nix-check
 ```
 
 `make check` verifies Go formatting, runs the test suite with the race detector,

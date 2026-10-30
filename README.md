@@ -252,6 +252,16 @@ PR preflight checks `gh auth status`; commitell then pushes itself and invokes
 
 ## Development
 
+Use `devenv shell` for the native default environment, or `devenv shell -- <command>`
+for one command. `devenv.nix` reuses the default Flake shell, including its compiler,
+build inputs and hooks; `flake.lock` remains the project toolchain pin.
+`devenv.yaml` and `devenv.lock` pin the native 2.4.0 runtime separately.
+After owner-managed shell-hook activation, review the configuration and explicitly
+run `devenv allow` only if you want automatic entry. `nix develop .` and existing
+named Flake shells remain available. The bridge uses Git-filtered source: new
+source files must be reviewed and Git-tracked before evaluation; never use
+`path:.` to copy ignored state into the Nix store. `.devenv/` is local ignored state.
+
 Make remains the authoritative build interface:
 
 ```sh
@@ -260,7 +270,7 @@ project-check full
 ```
 
 The workspace checks run `make check` and `make nix-check` in the pinned Nix
-development shell. For direct use, run `nix develop path:. --command make check`;
+development shell. For direct use, run `nix develop . --command make check`;
 the race-enabled Go tests require a C compiler. The Nix gate evaluates all
 three declared systems and builds the current system's package.
 
@@ -275,7 +285,6 @@ just help
 With Nix, `nix develop` provides Go, gopls, Git, GitHub CLI, Make, Just, nixfmt,
 deadnix, and statix; `nix build` runs the tests as part of the build and wraps
 the installed program with its `git` and `gh` runtime dependencies.
-`direnv allow` activates the same environment automatically through `.envrc`.
 Editors supporting Dev Containers can open `.devcontainer/devcontainer.json`
 for an equivalent Go 1.26 environment.
 

@@ -23,8 +23,8 @@ nix-check:
 	deadnix --fail .
 	statix check .
 	nix --option warn-dirty false fmt -- --ci
-	nix flake check --all-systems --no-write-lock-file path:.
-	nix build --no-link --no-write-lock-file path:.#default
+	nix flake check --all-systems --no-write-lock-file .
+	nix build --no-link --no-write-lock-file .#default
 
 release-check: check nix-check
 	@package_version="$$(nix eval --raw .#packages.$$(nix eval --raw --impure --expr builtins.currentSystem).commitell.version)"; \
