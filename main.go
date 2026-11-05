@@ -73,13 +73,15 @@ type commitMessage struct {
 }
 
 type chatRequest struct {
-	Model               string          `json:"model"`
-	Messages            []chatMessage   `json:"messages"`
-	Provider            *providerPolicy `json:"provider,omitempty"`
-	ResponseFormat      map[string]any  `json:"response_format"`
-	Temperature         float64         `json:"temperature"`
-	MaxTokens           int             `json:"max_tokens,omitempty"`
-	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
+	Model               string            `json:"model"`
+	Messages            []chatMessage     `json:"messages"`
+	Provider            *providerPolicy   `json:"provider,omitempty"`
+	ResponseFormat      map[string]any    `json:"response_format"`
+	Temperature         float64           `json:"temperature"`
+	ReasoningEffort     string            `json:"reasoning_effort,omitempty"`
+	Reasoning           map[string]string `json:"reasoning,omitempty"`
+	MaxTokens           int               `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int               `json:"max_completion_tokens,omitempty"`
 }
 
 type chatMessage struct {
@@ -533,6 +535,13 @@ func requestContent(ctx context.Context, cfg config, model, prompt string, maxTo
 		},
 		ResponseFormat: map[string]any{"type": "json_object"},
 		Temperature:    0.2,
+	}
+	if effort := modelReasoningEffort(model); effort != "" {
+		if service.openRouter {
+			payload.Reasoning = map[string]string{"effort": effort}
+		} else {
+			payload.ReasoningEffort = effort
+		}
 	}
 	if service.openRouter {
 		payload.Provider = &providerPolicy{

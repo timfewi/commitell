@@ -156,6 +156,13 @@ data policy governs the diff. The OpenRouter-only `--models`, `--auto-model`
 and `--eu` options are refused for other providers. `--offline`, the local
 secret scanner and all Git behavior are the same for every provider.
 
+For direct OpenAI, select `openai-compatible`, set `COMMITELL_BASE_URL` to
+`https://api.openai.com/v1`, provide `COMMITELL_API_KEY` at runtime, and use
+unprefixed model IDs such as `gpt-6-luna`. Luna requests explicitly disable
+reasoning and use `max_completion_tokens` to keep short commit messages within
+the output budget. The OpenRouter ID `openai/gpt-6-luna` uses the equivalent
+OpenRouter reasoning setting and requires a reasoning-capable endpoint.
+
 ## Install
 
 Requires Go 1.26+ and Git:

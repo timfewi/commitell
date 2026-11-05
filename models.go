@@ -20,14 +20,27 @@ const (
 )
 
 func requiredModelParameters(modelID string) []string {
-	return []string{"temperature", modelTokenParameter(modelID), "response_format"}
+	parameters := []string{"temperature", modelTokenParameter(modelID), "response_format"}
+	if modelReasoningEffort(modelID) != "" {
+		parameters = append(parameters, "reasoning")
+	}
+	return parameters
 }
 
 func modelTokenParameter(modelID string) string {
-	if strings.HasPrefix(modelID, "openai/") {
+	if strings.HasPrefix(modelID, "openai/") || modelReasoningEffort(modelID) != "" {
 		return "max_completion_tokens"
 	}
 	return "max_tokens"
+}
+
+func modelReasoningEffort(modelID string) string {
+	// Luna supports disabling reasoning, keeping short commit messages within
+	// the output budget while allowing the configured temperature.
+	if strings.TrimPrefix(modelID, "openai/") == "gpt-6-luna" {
+		return "none"
+	}
+	return ""
 }
 
 type modelArchitecture struct {
