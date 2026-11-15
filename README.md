@@ -241,15 +241,21 @@ MIT
 
 ## Repository overview
 
-The package also installs `cmt`. Use `cmt tree` to inspect repositories without
+The package also installs `cmt`. Use `cmt -t` to inspect repositories without
 an API key or model request:
 
 ```sh
-cmt tree --files ~/code
-cmt tree --all ~/code
-cmt tree --graph ~/code
-cmt tree --graph --json ~/code
+cmt -tF ~/code       # changed files
+cmt -tG ~/code       # dependency graph and Git status
+cmt -tA ~/code       # include clean repositories
+cmt -tGF ~/code      # graph with changed files
+cmt -tG --json ~/code
 ```
+
+Put `-t` first to select the overview. `F`, `G`, and `A` can be combined in
+that cluster or passed separately (`cmt -t -F -G`). `cmt tree --files`,
+`cmt tree --graph`, and `cmt tree --all` remain available. Use `cmt -t --help`
+for all overview options.
 
 The directory view shows repositories with changes or locally known ahead/behind
 status. `--all` includes clean repositories. `--files` lists changed paths;

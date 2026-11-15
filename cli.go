@@ -186,11 +186,19 @@ func normalizeExclude(path string) (string, error) {
 func usage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   commitell [options]
+  cmt -t[FGA] [tree options] [BASE]
   cmt tree [--files] [--all] [--graph] [--json] [BASE]
 
 Create one or more DCO-signed Git commits. By default, commitell analyzes the
 complete dirty working tree with OpenAI gpt-6-luna, then stages and commits
 all changes only after a valid message is ready.
+
+Repository overview (no API key needed):
+  -t                    Show repositories with changes or ahead/behind status.
+  -tF                   Include changed files.
+  -tG                   Show repository dependencies and Git status.
+  -tA                   Include clean repositories.
+                         Combine as -tGF; use -t --help for all tree options.
 
 Change selection:
   -s, --staged           Commit only changes already in the Git index.

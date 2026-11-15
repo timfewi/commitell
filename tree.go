@@ -38,20 +38,42 @@ func treeGit(dir string, args ...string) (string, error) {
 	return strings.TrimSuffix(string(out), "\n"), nil
 }
 
+// Tree mode must come first, so flag values in the commit workflow are never
+// mistaken for commands. A cluster such as -tGF expands to tree -G -F.
+func treeArguments(args []string) ([]string, bool) {
+	if len(args) == 0 {
+		return nil, false
+	}
+	if args[0] == "tree" {
+		return args[1:], true
+	}
+	if !strings.HasPrefix(args[0], "-t") {
+		return nil, false
+	}
+	var expanded []string
+	for _, option := range args[0][2:] {
+		expanded = append(expanded, "-"+string(option))
+	}
+	return append(expanded, args[1:]...), true
+}
+
 func treeCommand(args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("cmt tree", flag.ContinueOnError)
 	flags.SetOutput(out)
 	files := flags.Bool("files", false, "show changed paths")
 	flags.BoolVar(files, "f", false, "show changed paths")
+	flags.BoolVar(files, "F", false, "show changed paths")
 	reposOnly := flags.Bool("repos", false, "show repository summaries")
 	flags.BoolVar(reposOnly, "r", false, "show repository summaries")
 	all := flags.Bool("all", false, "include clean repositories")
+	flags.BoolVar(all, "A", false, "include clean repositories")
 	graph := flags.Bool("graph", false, "show local repository dependencies from flake.lock")
+	flags.BoolVar(graph, "G", false, "show local repository dependencies from flake.lock")
 	asJSON := flags.Bool("json", false, "print structured repository status")
 	depth := flags.Int("depth", 6, "maximum directory discovery depth")
 	limit := flags.Int("max-files", 10, "maximum paths per repository (0: all)")
 	flags.Usage = func() {
-		fmt.Fprintln(out, "Usage: cmt tree [--files] [--all] [--graph] [--json] [BASE]\nBASE defaults to CMT_ROOT, then RT_ROOT, then ~/code. Local refs only; no fetch.")
+		fmt.Fprintln(out, "Usage: cmt -t[FGA] [--json] [BASE]\n       cmt tree [--files] [--all] [--graph] [--json] [BASE]\nShortcuts: -tF files, -tG graph, -tA all repositories; combine as -tGF.\nBASE defaults to CMT_ROOT, then RT_ROOT, then ~/code. Local refs only; no fetch.")
 		flags.PrintDefaults()
 	}
 	for name, target := range map[string]*int{"RT_DEPTH": depth, "RT_MAX_FILES": limit} {
