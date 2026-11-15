@@ -26,7 +26,6 @@ func TestParseOptionsComposesWorkflowFlags(t *testing.T) {
 		"--solver", "model/two",
 		"--split",
 		"--dry-run",
-		"--eu",
 		"--pr",
 		"--remote", "upstream",
 		"--base", "main",
@@ -34,7 +33,7 @@ func TestParseOptionsComposesWorkflowFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !opts.staged || !opts.split || !opts.dryRun || !opts.eu || !opts.push || !opts.pullRequest {
+	if !opts.staged || !opts.split || !opts.dryRun || !opts.push || !opts.pullRequest {
 		t.Fatalf("boolean options not parsed: %+v", opts)
 	}
 	if want := []string{"broken.txt", "generated.json", "docs/draft.md"}; !reflect.DeepEqual(opts.excludes, want) {
@@ -48,22 +47,15 @@ func TestParseOptionsComposesWorkflowFlags(t *testing.T) {
 	}
 }
 
-func TestParseOptionsModelsIsReadOnly(t *testing.T) {
-	if _, err := parseOptions([]string{"--models", "--eu"}); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{
-		{"--models", "--solver", "model/one"},
-		{"--models", "--push"},
-		{"--models", "--exclude", "file.txt"},
-	} {
-		if _, err := parseOptions(args); err == nil || !strings.Contains(err.Error(), "--models can only") {
-			t.Fatalf("args %v: unexpected error %v", args, err)
+func TestParseOptionsRejectsRemovedProviderFlags(t *testing.T) {
+	for _, arg := range []string{"--models", "--eu", "--auto-model", "-l", "-e", "-a", "-le"} {
+		if _, err := parseOptions([]string{arg}); err == nil {
+			t.Fatalf("accepted removed option %s", arg)
 		}
 	}
 }
 
-func TestParseOptionsSupportsModelAliasAutoSelectionAndForce(t *testing.T) {
+func TestParseOptionsSupportsModelAliasAndForce(t *testing.T) {
 	opts, err := parseOptions([]string{"--model", "model/one", "--solver", "model/two", "--force"})
 	if err != nil {
 		t.Fatal(err)
@@ -71,9 +63,7 @@ func TestParseOptionsSupportsModelAliasAutoSelectionAndForce(t *testing.T) {
 	if !opts.force || !reflect.DeepEqual(opts.solvers, []string{"model/one", "model/two"}) {
 		t.Fatalf("unexpected options: %+v", opts)
 	}
-	if _, err := parseOptions([]string{"--auto-model", "--model", "model/one"}); err == nil || !strings.Contains(err.Error(), "--auto-model") {
-		t.Fatalf("unexpected auto-model conflict: %v", err)
-	}
+
 }
 
 func TestParseOptionsSupportsOfflineAndRejectsModelRoutingFlags(t *testing.T) {
@@ -86,8 +76,6 @@ func TestParseOptionsSupportsOfflineAndRejectsModelRoutingFlags(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"--offline", "--model", "model/one"},
-		{"--offline", "--auto-model"},
-		{"--offline", "--eu"},
 		{"--offline", "--split"},
 	} {
 		if _, err := parseOptions(args); err == nil || !strings.Contains(err.Error(), "--offline cannot") {
@@ -122,14 +110,6 @@ func TestParseOptionsSupportsShortFormsAndBooleanClusters(t *testing.T) {
 		t.Fatalf("short value options not parsed: %+v", opts)
 	}
 
-	listed, err := parseOptions([]string{"-le"})
-	if err != nil || !listed.models || !listed.eu {
-		t.Fatalf("clustered model listing not parsed: %+v, %v", listed, err)
-	}
-	automatic, err := parseOptions([]string{"-a"})
-	if err != nil || !automatic.autoModel {
-		t.Fatalf("short auto-model not parsed: %+v, %v", automatic, err)
-	}
 	offline, err := parseOptions([]string{"-od"})
 	if err != nil || !offline.offline || !offline.dryRun {
 		t.Fatalf("clustered offline options not parsed: %+v, %v", offline, err)
@@ -155,9 +135,9 @@ func TestUsageExplainsOptionsPrivacyAndUseCases(t *testing.T) {
 		"Short option clusters:",
 		"Common use cases:",
 		"commitell -scd",
-		"Gemini 3.1 Flash Lite -> Gemini 2.5 Flash Lite -> GPT-4o mini",
-		"--force never relaxes these provider rules",
-		"OPENROUTER_API_KEY",
+		"gpt-6-luna",
+		"Selected changes are sent directly to OpenAI",
+		"COMMITELL_API_KEY",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("help output missing %q:\n%s", want, out.String())
@@ -165,22 +145,12 @@ func TestUsageExplainsOptionsPrivacyAndUseCases(t *testing.T) {
 	}
 }
 
-func TestUsageDocumentsEveryProvider(t *testing.T) {
+func TestUsageDocumentsOnlyOpenAI(t *testing.T) {
 	var out bytes.Buffer
 	usage(&out)
-	for _, want := range []string{
-		"COMMITELL_PROVIDER",
-		"opencode-go",
-		"openai-compatible",
-		"OPENCODE_GO_API_KEY",
-		"glm-5.3-flash",
-		"COMMITELL_API_KEY",
-		"COMMITELL_BASE_URL",
-		"COMMITELL_MODELS",
-		"Other providers receive no such policy",
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("help output missing %q:\n%s", want, out.String())
+	for _, unwanted := range []string{"COMMITELL_PROVIDER", "COMMITELL_BASE_URL", "OpenRouter", "opencode", "--auto-model", "--eu", "--models"} {
+		if strings.Contains(out.String(), unwanted) {
+			t.Errorf("help documents removed setting %q", unwanted)
 		}
 	}
 }

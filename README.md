@@ -9,7 +9,7 @@ model-written or deterministic local messages. With no options it preserves
 the original workflow and commits the complete dirty working tree.
 
 ```sh
-export OPENROUTER_API_KEY=sk-or-v1-...
+export COMMITELL_API_KEY="<your OpenAI API key>"
 commitell
 ```
 
@@ -23,24 +23,13 @@ Select, split, and publish changes when needed:
 
 ```sh
 commitell --staged --exclude "broken.txt,generated.json"
-commitell --split --model google/gemini-3.1-flash-lite --dry-run
-commitell --auto-model --dry-run
+commitell --split --model gpt-6-luna --dry-run
 commitell --split --push --pr --base main
 commitell --push --force --base main
 ```
 
-List models that are compatible with your OpenRouter account, its privacy
-settings and guardrails, commitell's required parameters, and an available
-Zero Data Retention endpoint:
-
-```sh
-commitell --models
-commitell --models --eu
-```
-
-`--models --eu` and commit runs with `--eu` use OpenRouter's EU in-region
-routing when it is enabled for the account. This is a routing property, not a
-legal GDPR certification.
+Commitell uses OpenAI directly at `https://api.openai.com/v1` and defaults to
+`gpt-6-luna`. There is no provider selector or configurable API URL.
 
 ## Options
 
@@ -52,14 +41,10 @@ legal GDPR certification.
   commits. A file and both sides of a rename remain in one commit.
 - `--model MODEL` is repeatable and defines the complete model fallback order.
   `--solver` remains an alias.
-- `--auto-model` discovers the models available to the API key and selects
-  compatible ZDR models with at least 128k context. It keeps commitell's
-  preferred models first, then ranks fallbacks by context window and price.
 - `--offline` generates a conservative Conventional Commit message locally
-  without contacting OpenRouter or any model API. It needs no API key and
-  cannot be combined with model selection, `--eu`, or model-driven `--split`.
+  without contacting any model API. It needs no API key and
+  cannot be combined with model selection or model-driven `--split`.
 - `--dry-run` generates and prints the plan without changing Git or publishing.
-- `--eu` routes model discovery and completions through `eu.openrouter.ai`.
 - `--push` pushes the current branch after all commits succeed.
 - `--force` bypasses local likely-secret checks and uses `git push
   --force-with-lease`. It is required to push the default branch. This can
@@ -88,80 +73,31 @@ use `--exclude` or the explicit `--force` override. Matched secret values are
 not printed, and files are never excluded automatically. This warning flow also
 covers harmless fixtures such as test values in `flake.nix`.
 
-## Privacy
+## Models and privacy
 
-For the strongest privacy guarantee, use `commitell --offline`. It creates the
-message from local file status only, makes no OpenRouter or model API request,
-and does not require `OPENROUTER_API_KEY`. The result is intentionally more
-conservative than a model-written message. Explicit `--push` or `--pr` still
-sends commits to the configured Git remote; offline mode only guarantees that
-no model provider receives the diff.
+`COMMITELL_API_KEY` supplies the OpenAI key. `COMMITELL_MODELS` accepts a
+comma-separated fallback order; repeated `--model` (or `--solver`) flags replace
+that order. The default is `gpt-6-luna`. Luna requests set `reasoning_effort` to
+`none` for short commit messages and use `max_completion_tokens` for the output
+budget. See [OpenAI's Luna documentation](https://developers.openai.com/api/docs/models/gpt-6-luna).
 
-Every OpenRouter completion request requires both Zero Data Retention and
-denied data collection. The default model order is:
+Selected changes are sent directly to OpenAI under the account's data policies.
+Commitell does not assert Zero Data Retention or EU routing. The former
+OpenRouter/OpenCode providers, arbitrary API URLs, and `--models`, `--auto-model`,
+and `--eu` flags have been removed. Legacy provider, URL, and provider-specific
+key environment variables are ignored; they cannot redirect requests or supply
+the OpenAI key.
 
-1. `google/gemini-3.1-flash-lite`
-2. `google/gemini-2.5-flash-lite`
-3. `openai/gpt-4o-mini`
+`commitell --offline` creates the message from local file status, makes no model
+API request, and needs no key. Explicit `--push` or `--pr` still publishes to the
+configured Git remote. If every configured model fails, Commitell stops before
+staging; offline mode remains available.
 
-These model IDs are availability, context, quality, and cost preferences, not
-the privacy trust boundary. OpenRouter may select or fall back between provider
-endpoints only when they satisfy the request's ZDR, denied-data-collection, and
-required-parameter constraints. If none qualify, the request fails rather than
-relaxing a privacy constraint. `--force` never changes ZDR or provider privacy;
-it only bypasses local likely-secret checks and controls protected-branch
-publishing.
-
-Repeated `--model` (or legacy `--solver`) flags replace this order. Use
-`--auto-model` to discover and rank compatible account models automatically.
-If all three fast defaults are unavailable under the required policies,
-`commitell` stops before staging anything; `commitell --offline` remains the
-provider-independent fallback. The local scanner flags common secret filenames
-and token patterns for confirmation, binary contents are omitted, and only a
-bounded diff plus recent commit subjects is sent. `--force` is the explicit
-override for the local likely-secret confirmation.
-
-`--models` obtains the account-filtered list from OpenRouter and intersects it
-with current ZDR endpoints. OpenRouter applies the API key's account privacy
-settings and guardrails to that list; commitell does not request privileged
-guardrail details or require a management key.
-
-The local scanner is deliberately conservative, but it is not a complete
-secret-management system. OpenRouter still processes the request and retains
-request metadata under its published policy even when prompt retention is
-disabled. Committell cannot inspect or override OpenRouter's account-level
-Private Input & Output Logging or OpenRouter Use of Inputs/Outputs opt-ins; keep
-both disabled for private cloud use.
-
-### Model providers
-
-Commitell talks to any service that implements the OpenAI chat-completions API.
-`COMMITELL_PROVIDER` selects it:
-
-| `COMMITELL_PROVIDER` | Endpoint | API key variable | Default models |
-| --- | --- | --- | --- |
-| `openrouter` (default) | OpenRouter | `OPENROUTER_API_KEY` | the order above |
-| `opencode-go` | [OpenCode Go](https://opencode.ai) | `OPENCODE_GO_API_KEY` | `glm-5.3-flash` |
-| `openai-compatible` | `COMMITELL_BASE_URL` | `COMMITELL_API_KEY` | none |
-
-`COMMITELL_BASE_URL` is the API base without `/chat/completions`, for example
-`http://localhost:11434/v1` for a local server; it is accepted only with
-`openai-compatible`. `COMMITELL_MODELS` takes a comma-separated fallback order
-that replaces any provider's defaults, and repeated `--model` flags replace
-both. `openai-compatible` has no defaults, so one of the two is required.
-
-Only OpenRouter requests carry the Zero Data Retention and
-denied-data-collection policy described above; for every other provider its own
-data policy governs the diff. The OpenRouter-only `--models`, `--auto-model`
-and `--eu` options are refused for other providers. `--offline`, the local
-secret scanner and all Git behavior are the same for every provider.
-
-For direct OpenAI, select `openai-compatible`, set `COMMITELL_BASE_URL` to
-`https://api.openai.com/v1`, provide `COMMITELL_API_KEY` at runtime, and use
-unprefixed model IDs such as `gpt-6-luna`. Luna requests explicitly disable
-reasoning and use `max_completion_tokens` to keep short commit messages within
-the output budget. The OpenRouter ID `openai/gpt-6-luna` uses the equivalent
-OpenRouter reasoning setting and requires a reasoning-capable endpoint.
+The local scanner flags common secret filenames and token patterns for
+confirmation, omits binary contents, and bounds the outbound diff and recent
+commit subjects. It is not a complete secret-management system. `--force`
+bypasses the local likely-secret confirmation; review the selected content
+before using it.
 
 ## Install
 
@@ -211,7 +147,7 @@ environment.systemPackages = [
 ];
 ```
 
-Except in `--offline` mode, `commitell` reads `OPENROUTER_API_KEY` from the
+Except in `--offline` mode, `commitell` reads `COMMITELL_API_KEY` from the
 environment. Do not put the key in a Nix expression — string literals end up
 world-readable in `/nix/store`.
 Wrap the package instead and read the secret at runtime, for example from
@@ -222,7 +158,7 @@ pkgs.writeShellApplication {
   name = "commitell";
   runtimeInputs = [ pkgs.git pkgs.coreutils ];
   text = ''
-    OPENROUTER_API_KEY="$(cat ${config.age.secrets.openrouter-api-key.path})" \
+    COMMITELL_API_KEY="$(cat ${config.age.secrets.openai-api-key.path})" \
       exec ${inputs.commitell.packages.${pkgs.stdenv.hostPlatform.system}.default}/bin/commitell "$@"
   '';
 }
@@ -334,6 +270,6 @@ Legacy `RT_DEPTH` and `RT_MAX_FILES` are accepted for migration from `rt`.
 The flake exports `homeModules.default` for Home Manager. Enable
 `programs.commitell.enable` to install `commitell` and `cmt` configured for
 OpenAI, defaulting to `gpt-6-luna`. Supply `COMMITELL_API_KEY` at runtime, or
-`COMMITELL_API_KEY_FILE`, or `programs.commitell.apiKeyFile`. The module fixes
+`COMMITELL_API_KEY_FILE`, or `programs.commitell.apiKeyFile`. The application fixes
 OpenAI's URL and needs no provider setting. `programs.commitell.model`,
 `COMMITELL_MODELS`, and `--model` select the model without changing providers.

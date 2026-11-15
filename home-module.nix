@@ -9,8 +9,6 @@ let
   wrapper = pkgs.writeShellApplication {
     name = "commitell";
     text = ''
-      export COMMITELL_PROVIDER=openai-compatible
-      export COMMITELL_BASE_URL=https://api.openai.com/v1
       default_model=${lib.escapeShellArg cfg.model}
       default_key_file=${lib.escapeShellArg cfg.apiKeyFile}
       export COMMITELL_MODELS="''${COMMITELL_MODELS:-$default_model}"

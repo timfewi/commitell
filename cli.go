@@ -10,12 +10,9 @@ import (
 )
 
 type options struct {
-	models      bool
-	eu          bool
 	staged      bool
 	excludes    []string
 	solvers     []string
-	autoModel   bool
 	offline     bool
 	split       bool
 	dryRun      bool
@@ -55,12 +52,9 @@ func (v listValue) Set(value string) error {
 }
 
 var shortOptions = map[byte]bool{
-	'l': false,
-	'e': false,
 	's': false,
 	'x': true,
 	'm': true,
-	'a': false,
 	'o': false,
 	'c': false,
 	'd': false,
@@ -74,8 +68,8 @@ var shortOptions = map[byte]bool{
 }
 
 var longOptions = map[string]bool{
-	"models": true, "eu": true, "staged": true, "exclude": true,
-	"solver": true, "model": true, "auto-model": true, "offline": true,
+	"staged": true, "exclude": true,
+	"solver": true, "model": true, "offline": true,
 	"split": true, "dry-run": true, "push": true, "force": true,
 	"pr": true, "remote": true, "base": true, "version": true,
 	"help": true,
@@ -122,8 +116,6 @@ func parseOptions(args []string) (options, error) {
 		set.BoolVar(target, long, false, description)
 		set.BoolVar(target, short, false, description)
 	}
-	boolFlag(&opts.models, "models", "l", "list compatible OpenRouter models")
-	boolFlag(&opts.eu, "eu", "e", "use EU in-region OpenRouter routing")
 	boolFlag(&opts.staged, "staged", "s", "commit only staged changes")
 	excludeValue := listValue{values: &opts.excludes, splitComma: true}
 	set.Var(excludeValue, "exclude", "exclude repository-relative files")
@@ -132,7 +124,6 @@ func parseOptions(args []string) (options, error) {
 	set.Var(modelValue, "solver", "model to try, in fallback order (alias: --model)")
 	set.Var(modelValue, "model", "model to try, in fallback order")
 	set.Var(modelValue, "m", "model to try, in fallback order")
-	boolFlag(&opts.autoModel, "auto-model", "a", "select compatible OpenRouter models automatically")
 	boolFlag(&opts.offline, "offline", "o", "generate commit messages locally without a model API request")
 	boolFlag(&opts.split, "split", "c", "split changes into logical commits")
 	boolFlag(&opts.dryRun, "dry-run", "d", "show the plan without changing Git or publishing")
@@ -157,11 +148,8 @@ func parseOptions(args []string) (options, error) {
 	if opts.pullRequest {
 		opts.push = true
 	}
-	if opts.autoModel && len(opts.solvers) != 0 {
-		return options{}, errors.New("--auto-model cannot be combined with --model or --solver")
-	}
-	if opts.offline && (opts.autoModel || len(opts.solvers) != 0 || opts.eu || opts.split) {
-		return options{}, errors.New("--offline cannot be combined with --auto-model, --model, --solver, --eu, or --split")
+	if opts.offline && (len(opts.solvers) != 0 || opts.split) {
+		return options{}, errors.New("--offline cannot be combined with --model, --solver, or --split")
 	}
 	if strings.TrimSpace(opts.remote) == "" {
 		return options{}, errors.New("--remote must not be empty")
@@ -179,9 +167,6 @@ func parseOptions(args []string) (options, error) {
 			return options{}, errors.New("--model must not be empty")
 		}
 		opts.solvers[i] = model
-	}
-	if opts.models && (opts.staged || len(opts.excludes) != 0 || len(opts.solvers) != 0 || opts.autoModel || opts.offline || opts.split || opts.dryRun || opts.push || opts.force || opts.pullRequest || opts.base != "" || opts.remote != "origin") {
-		return options{}, errors.New("--models can only be combined with --eu")
 	}
 	return opts, nil
 }
@@ -204,8 +189,7 @@ func usage(w io.Writer) {
   cmt tree [--files] [--all] [--graph] [--json] [BASE]
 
 Create one or more DCO-signed Git commits. By default, commitell analyzes the
-complete dirty working tree with a fast model from the configured provider
-(OpenRouter unless COMMITELL_PROVIDER says otherwise), then stages and commits
+complete dirty working tree with OpenAI gpt-6-luna, then stages and commits
 all changes only after a valid message is ready.
 
 Change selection:
@@ -217,15 +201,8 @@ Change selection:
 Models and privacy:
   -m, --model MODEL      Model to try. Repeat to define the complete fallback
                          order. --solver is a legacy alias and also uses -m.
-  -a, --auto-model       Discover and rank account-compatible ZDR models.
-                         OpenRouter only.
   -o, --offline          Generate a conservative message locally. No API key
                          or model provider is involved.
-  -e, --eu               Use OpenRouter EU in-region routing when enabled for
-                         the account. OpenRouter only.
-  -l, --models           List account-, guardrail-, parameter-, and
-                         ZDR-compatible models. May be combined only with --eu.
-                         OpenRouter only.
 
 Preview and publishing:
   -d, --dry-run          Print the commit and publish plan without changing Git.
@@ -244,22 +221,15 @@ Short option clusters:
   Boolean short options can be combined. For example, -scd is equivalent to
   --staged --split --dry-run. Options that take a value (-x, -m, -r, -b) must
   be written separately or placed last in a cluster:
-    commitell -sdm google/gemini-3.1-flash-lite
+    commitell -sdm gpt-6-luna
 
 Common use cases:
   Safest local commit; no model provider receives the diff:
     commitell --offline
     commitell -o
 
-  Use the fast private OpenRouter default fallback order:
+  Use OpenAI with the default gpt-6-luna model:
     commitell
-    # Gemini 3.1 Flash Lite -> Gemini 2.5 Flash Lite -> GPT-4o mini
-
-  Use another OpenAI-compatible provider:
-    COMMITELL_PROVIDER=opencode-go commitell
-    COMMITELL_PROVIDER=openai-compatible \
-      COMMITELL_BASE_URL=http://localhost:11434/v1 \
-      COMMITELL_MODELS=qwen3:8b commitell
 
   Preview staged changes without committing:
     commitell --staged --dry-run
@@ -273,21 +243,14 @@ Common use cases:
     commitell -x .env.example,dist/output.json --dry-run
 
   Choose an explicit fallback order:
-    commitell -m google/gemini-2.5-flash-lite \
-              -m openai/gpt-4o-mini
-
-  List models allowed by the current account and privacy settings:
-    commitell --models
-    commitell -le
+    commitell -m gpt-6-luna -m gpt-4o-mini
 
   Push a feature branch and open a draft pull request:
     commitell --split --pr --base main
     commitell -cP -b main
 
 Privacy and safety:
-  Every OpenRouter request enforces ZDR, denied provider data collection, and
-  required parameter support. --force never relaxes these provider rules.
-  Other providers receive no such policy; their own data policy applies.
+  Selected changes are sent directly to OpenAI. Account data policies apply.
   Likely-secret matches are shown by location and type, then require a y/N
   confirmation before any model request or staging. Non-interactive runs fail
   closed; use --exclude or the explicit --force override after reviewing the
@@ -295,14 +258,8 @@ Privacy and safety:
   commit must work without a model provider. Normal Git hooks still run.
 
 Environment:
-  COMMITELL_PROVIDER     openrouter (default), opencode-go, or
-                         openai-compatible.
-  OPENROUTER_API_KEY     Key for openrouter. Required except with --offline.
-  OPENCODE_GO_API_KEY    Key for opencode-go (default model glm-5.3-flash).
-  COMMITELL_API_KEY      Key for openai-compatible.
-  COMMITELL_BASE_URL     API base for openai-compatible, without
-                         /chat/completions.
-  COMMITELL_MODELS       Comma-separated default fallback order; required for
-                         openai-compatible unless --model is given.
+  COMMITELL_API_KEY      OpenAI API key. Required except with --offline or tree.
+  COMMITELL_MODELS       Comma-separated fallback order (default: gpt-6-luna).
+                         Repeated --model flags replace this order.
 `)
 }
