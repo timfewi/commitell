@@ -199,6 +199,8 @@ Repository overview (no API key needed):
   -tG                   Show repository dependencies and Git status.
   -tA                   Include clean repositories.
                          Combine as -tGF; use -t --help for all tree options.
+                         Colored on a terminal; --color never or NO_COLOR
+                         disables it.
 
 Change selection:
   -s, --staged           Commit only changes already in the Git index.

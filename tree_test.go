@@ -145,7 +145,7 @@ func TestTreeGraphAndCycles(t *testing.T) {
 		t.Fatalf("deps=%v", repos)
 	}
 	var out bytes.Buffer
-	renderDependencyGraph(&out, repos, false, 10)
+	treeRenderer{out: &out, limit: 10}.renderDependencyGraph(repos)
 	if !strings.Contains(out.String(), "cycle") {
 		t.Fatal("cycle not marked")
 	}
@@ -181,5 +181,100 @@ func TestTreeWorktreeAndErrors(t *testing.T) {
 	}
 	if strings.Contains(treeLabel("bad\x1b[0m"), "\x1b") {
 		t.Fatal("terminal escape leaked")
+	}
+}
+
+func TestTreeBranchParsing(t *testing.T) {
+	for header, want := range map[string]branchState{
+		"main...origin/main":                          {local: "main", upstream: "origin/main"},
+		"main...origin/main [ahead 2, behind 13]":     {local: "main", upstream: "origin/main", ahead: 2, behind: 13},
+		"feature...upstream/feature [gone]":           {local: "feature", upstream: "upstream/feature", gone: true},
+		"main":                                        {local: "main"},
+		"HEAD (no branch)":                            {detached: true},
+		"No commits yet on main":                      {local: "main", unborn: true},
+		"No commits yet on main...origin/main [gone]": {local: "main", upstream: "origin/main", unborn: true, gone: true},
+	} {
+		if got := parseBranch(header); got != want {
+			t.Errorf("parseBranch(%q) = %+v, want %+v", header, got, want)
+		}
+	}
+}
+
+func TestTreeColorModes(t *testing.T) {
+	var out bytes.Buffer
+	for mode, want := range map[string]bool{"always": true, "never": false, "auto": false} {
+		if got, err := treeColor(mode, &out); err != nil || got != want {
+			t.Fatalf("treeColor(%q) = %v, %v", mode, got, err)
+		}
+	}
+	if _, err := treeColor("sometimes", &out); err == nil {
+		t.Fatal("accepted invalid color mode")
+	}
+	base := t.TempDir()
+	writeFile(t, filepath.Join(treeFixture(t, base, "dirty\x1b[31m"), "changed"), "fixture")
+	if err := treeCommand([]string{"--color", "always", "--files", base}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "\x1b[31m??\x1b[0m changed") || strings.Contains(out.String(), "dirty\x1b") {
+		t.Fatalf("unexpected colored output: %q", &out)
+	}
+	out.Reset()
+	if err := treeCommand([]string{"--color", "never", "--files", base}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "\x1b") {
+		t.Fatalf("color leaked with --color never: %q", &out)
+	}
+}
+
+func TestTreeRenderLayout(t *testing.T) {
+	repos := []treeRepo{
+		{Path: "dotfiles", Branch: "main...origin/main [behind 1]", Changes: []string{" M a.nix", "A  checks/b.nix", "?? c"}},
+		{Path: "projects/labs/deep/repo", Branch: "main", Changes: []string{"UU conflict.txt"}},
+		{Path: "projects/x", Branch: "dev...fork/dev [ahead 2]", Changes: []string{}},
+	}
+	var out bytes.Buffer
+	treeRenderer{out: &out, files: true, limit: 2}.renderRepoTree("/base", repos)
+	want := `/base
+├── dotfiles  main ↓1 · 3 changed (1 staged, 1 unstaged, 1 untracked)
+│      M a.nix
+│     A  checks/b.nix
+│     … 1 more file
+└── projects
+    ├── labs/deep/repo  main (no upstream) · 1 conflict
+    │     UU conflict.txt
+    └── x  dev → fork/dev ↑2 · clean
+`
+	if out.String() != want {
+		t.Fatalf("tree layout:\n%s\nwant:\n%s", &out, want)
+	}
+}
+
+func TestTreeGraphLayout(t *testing.T) {
+	repos := []treeRepo{
+		{Path: "app", Branch: "main...origin/main", Changes: []string{}, Dependencies: []string{"lib", "tool"}},
+		{Path: "host", Branch: "main...origin/main", Changes: []string{}, Dependencies: []string{"lib"}},
+		{Path: "lib", Branch: "main...origin/main", Changes: []string{" M x.go"}, Dependencies: []string{"tool"}},
+		{Path: "loose", Branch: "main...origin/main", Changes: []string{"?? y"}},
+		{Path: "quiet", Branch: "main...origin/main", Changes: []string{}},
+		{Path: "tool", Branch: "main...origin/main", Changes: []string{}},
+	}
+	var out bytes.Buffer
+	treeRenderer{out: &out}.renderDependencyGraph(repos)
+	want := `consumer ─▶ input · local flake.lock matches
+app  main · clean
+├─▶ lib  main · 1 unstaged
+│   └─▶ tool  main · clean
+└─▶ tool (shown above)
+
+host  main · clean
+└─▶ lib (shown above)
+
+without local flake links
+  loose  main · 1 untracked
+  … 1 clean repository hidden (use -A to list)
+`
+	if out.String() != want {
+		t.Fatalf("graph layout:\n%s\nwant:\n%s", &out, want)
 	}
 }

@@ -70,10 +70,11 @@ func treeCommand(args []string, out io.Writer) error {
 	graph := flags.Bool("graph", false, "show local repository dependencies from flake.lock")
 	flags.BoolVar(graph, "G", false, "show local repository dependencies from flake.lock")
 	asJSON := flags.Bool("json", false, "print structured repository status")
+	colorMode := flags.String("color", "auto", "color output: auto, always or never (auto honors NO_COLOR)")
 	depth := flags.Int("depth", 6, "maximum directory discovery depth")
 	limit := flags.Int("max-files", 10, "maximum paths per repository (0: all)")
 	flags.Usage = func() {
-		fmt.Fprintln(out, "Usage: cmt -t[FGA] [--json] [BASE]\n       cmt tree [--files] [--all] [--graph] [--json] [BASE]\nShortcuts: -tF files, -tG graph, -tA all repositories; combine as -tGF.\nBASE defaults to CMT_ROOT, then RT_ROOT, then ~/code. Local refs only; no fetch.")
+		fmt.Fprintln(out, "Usage: cmt -t[FGA] [--json] [--color WHEN] [BASE]\n       cmt tree [--files] [--all] [--graph] [--json] [--color WHEN] [BASE]\nShortcuts: -tF files, -tG graph, -tA all repositories; combine as -tGF.\nBASE defaults to CMT_ROOT, then RT_ROOT, then ~/code. Local refs only; no fetch.")
 		flags.PrintDefaults()
 	}
 	for name, target := range map[string]*int{"RT_DEPTH": depth, "RT_MAX_FILES": limit} {
@@ -94,6 +95,10 @@ func treeCommand(args []string, out io.Writer) error {
 	if flags.NArg() > 1 || *depth < 1 || *depth > 99 || *limit < 0 || *limit > 9999 {
 		return errors.New("expected one base directory, depth 1..99 and max-files 0..9999")
 	}
+	color, err := treeColor(*colorMode, out)
+	if err != nil {
+		return err
+	}
 	base := flags.Arg(0)
 	if base == "" {
 		base = os.Getenv("CMT_ROOT")
@@ -108,7 +113,7 @@ func treeCommand(args []string, out io.Writer) error {
 		}
 		base = filepath.Join(home, "code")
 	}
-	base, err := filepath.Abs(base)
+	base, err = filepath.Abs(base)
 	if err != nil {
 		return err
 	}
@@ -125,20 +130,21 @@ func treeCommand(args []string, out io.Writer) error {
 	}
 	selected := []treeRepo{}
 	for _, repo := range repos {
-		if *all || *graph || len(repo.Changes) > 0 || strings.Contains(repo.Branch, "[ahead ") || strings.Contains(repo.Branch, "[behind ") {
+		if *all || *graph || len(repo.Changes) > 0 || !repoInSync(repo) {
 			selected = append(selected, repo)
 		}
 	}
 	if *asJSON {
 		return json.NewEncoder(out).Encode(selected)
 	}
-	fmt.Fprintf(out, "%s\n", treeLabel(base))
+	r := treeRenderer{out: out, style: treeStyle{color: color}, files: *files && !*reposOnly, limit: *limit, all: *all}
 	if *graph {
-		renderDependencyGraph(out, selected, *files && !*reposOnly, *limit)
+		r.println(r.style.paint(sgrBold, treeLabel(base)))
+		r.renderDependencyGraph(selected)
 	} else {
-		renderRepoTree(out, selected, *files && !*reposOnly, *limit)
+		r.renderRepoTree(base, selected)
 	}
-	fmt.Fprintf(out, "\nRepositories: %d · local refs only, no fetch\n", len(selected))
+	r.footer(selected)
 	return nil
 }
 
@@ -202,66 +208,6 @@ func treeLabel(s string) string {
 		}
 	}
 	return s
-}
-func repoSummary(r treeRepo) string {
-	return fmt.Sprintf("[%s · %d changed paths]", treeLabel(r.Branch), len(r.Changes))
-}
-func renderFiles(out io.Writer, r treeRepo, prefix string, limit int) {
-	count := len(r.Changes)
-	if limit > 0 && count > limit {
-		count = limit
-	}
-	for _, line := range r.Changes[:count] {
-		fmt.Fprintf(out, "%s  %s\n", prefix, treeLabel(line))
-	}
-	if count < len(r.Changes) {
-		fmt.Fprintf(out, "%s  … %d more files\n", prefix, len(r.Changes)-count)
-	}
-}
-
-type repoTreeNode struct {
-	repo     *treeRepo
-	children map[string]*repoTreeNode
-}
-
-func renderRepoTree(out io.Writer, repos []treeRepo, files bool, limit int) {
-	root := &repoTreeNode{children: map[string]*repoTreeNode{}}
-	for i := range repos {
-		node := root
-		if repos[i].Path != "." {
-			for _, part := range strings.Split(repos[i].Path, string(filepath.Separator)) {
-				if node.children[part] == nil {
-					node.children[part] = &repoTreeNode{children: map[string]*repoTreeNode{}}
-				}
-				node = node.children[part]
-			}
-		}
-		node.repo = &repos[i]
-	}
-	var render func(*repoTreeNode, string)
-	render = func(node *repoTreeNode, prefix string) {
-		if node.repo != nil {
-			fmt.Fprintf(out, "%s%s\n", prefix, repoSummary(*node.repo))
-			if files {
-				renderFiles(out, *node.repo, prefix, limit)
-			}
-		}
-		names := []string{}
-		for name := range node.children {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for i, name := range names {
-			connector, next := "├── ", "│   "
-			if i == len(names)-1 {
-				connector, next = "└── ", "    "
-			}
-			child := node.children[name]
-			fmt.Fprintf(out, "%s%s%s\n", prefix, connector, treeLabel(name))
-			render(child, prefix+next)
-		}
-	}
-	render(root, "")
 }
 
 // Remote identity is used only for matching; credentials and URLs are never displayed.
@@ -332,38 +278,4 @@ func resolveTreeDependencies(base string, repos []treeRepo) error {
 		sort.Strings(repos[i].Dependencies)
 	}
 	return nil
-}
-func renderDependencyGraph(out io.Writer, repos []treeRepo, files bool, limit int) {
-	fmt.Fprintln(out, "Dependencies: consumer → input (local matches from flake.lock)")
-	byPath := map[string]treeRepo{}
-	for _, r := range repos {
-		byPath[r.Path] = r
-	}
-	var render func(string, string, map[string]bool)
-	expanded := map[string]bool{}
-	render = func(path, prefix string, ancestors map[string]bool) {
-		r := byPath[path]
-		fmt.Fprintf(out, "%s%s %s", prefix, treeLabel(path), repoSummary(r))
-		if ancestors[path] {
-			fmt.Fprintln(out, " ↻ cycle")
-			return
-		}
-		if expanded[path] {
-			fmt.Fprintln(out, " (shown above)")
-			return
-		}
-		expanded[path] = true
-		fmt.Fprintln(out)
-		if files {
-			renderFiles(out, r, prefix, limit)
-		}
-		ancestors[path] = true
-		for _, dep := range r.Dependencies {
-			render(dep, prefix+"  → ", ancestors)
-		}
-		delete(ancestors, path)
-	}
-	for _, r := range repos {
-		render(r.Path, "", map[string]bool{})
-	}
 }

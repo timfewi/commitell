@@ -258,16 +258,27 @@ that cluster or passed separately (`cmt -t -F -G`). `cmt tree --files`,
 for all overview options.
 
 The directory view shows repositories with changes or locally known ahead/behind
-status. `--all` includes clean repositories. `--files` lists changed paths;
-`--max-files N` bounds each list (zero means all). `--depth N` bounds discovery.
-Linked worktrees and nested repositories are included; dependency/cache folders
-and directory symlinks are skipped. No fetch or repository code is executed.
+status. `--all` includes clean repositories. Each repository line shows its
+branch, a differing upstream, `↑`/`↓` ahead/behind counts and a change summary
+(staged, unstaged, untracked, conflicts). Directories that lead to a single
+entry collapse into one path. `--files` lists changed paths in Git's short
+status format; `--max-files N` bounds each list (zero means all). `--depth N`
+bounds discovery. Linked worktrees and nested repositories are included;
+dependency/cache folders and directory symlinks are skipped. No fetch or
+repository code is executed.
 
-The graph shows **consumer → input** edges by matching direct `flake.lock`
-inputs to the discovered repositories' origin URLs. It includes clean repos,
-marks cycles, and omits external inputs without a matching local checkout.
-It does not infer dependencies for other build systems or evaluate Nix files.
-Unreadable repositories and malformed lockfiles fail visibly.
+The graph shows **consumer ─▶ input** edges by matching direct `flake.lock`
+inputs to the discovered repositories' origin URLs. Each repository without a
+local consumer starts a tree; an input reached again is marked `(shown above)`
+and cycles are marked `↻ cycle`. Repositories without local flake links are
+listed below the trees; clean ones are counted there unless `--all` is set.
+External inputs without a matching local checkout are omitted. It does not
+infer dependencies for other build systems or evaluate Nix files. Unreadable
+repositories and malformed lockfiles fail visibly.
+
+Output is colored on a terminal using Git's status colors. `--color never`
+or a non-empty `NO_COLOR` disables color; `--color always` keeps it in pipes.
+`--json` output is never colored.
 
 The base directory defaults to `CMT_ROOT`, then legacy `RT_ROOT`, then `~/code`.
 Legacy `RT_DEPTH` and `RT_MAX_FILES` are accepted for migration from `rt`.
