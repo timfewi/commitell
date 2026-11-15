@@ -96,7 +96,7 @@ func command(args []string, in io.Reader, out, errOut io.Writer) int {
 			return 0
 		}
 		if err == nil {
-			err = treeCommand(opts, out)
+			err = treeOverview(opts, in, out, errOut)
 		}
 		if err != nil {
 			printDiagnostic(errOut, opts.colorMode, "commitell tree", err)

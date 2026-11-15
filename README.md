@@ -319,6 +319,12 @@ repositories and malformed lockfiles fail visibly.
 The overview uses Git's status colors and the shared [color policy](#colors).
 `--json` output is never colored. Put flags before the base directory.
 
+In an interactive terminal, the overview opens in `less` at the first line when
+it exceeds one screen. Scroll with the arrow keys or Space, search with `/`,
+and press `q` to return to the shell. Short output exits the pager immediately.
+Pipes, redirected output, JSON and `TERM=dumb` bypass the pager. If `less` is
+unavailable, the overview prints directly. Nix packages include `less`.
+
 The base directory defaults to `CMT_ROOT`, then legacy `RT_ROOT`, then `~/code`.
 Legacy `RT_DEPTH` and `RT_MAX_FILES` supply defaults for migration from `rt`;
 explicit `--depth` and `--max-files` flags take precedence.

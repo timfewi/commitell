@@ -4,6 +4,8 @@
 
 ### Added
 
+- Interactive repository overviews start at the top in `less`, with scrolling,
+  search and `q` to quit; short output and redirected output remain direct.
 - Shared terminal colors for help, previews, success messages, warnings and
   errors. Both commit and overview modes accept `--color auto|always|never`.
 - Grouped, colored help for both workflows, with examples and current defaults.

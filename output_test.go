@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -11,6 +12,36 @@ import (
 )
 
 var ansiStyle = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func TestOverviewPager(t *testing.T) {
+	content := "first repository\n" + strings.Repeat("more repositories\n", 100) + "last repository\n"
+	for _, behavior := range []string{"copy", "missing", "failure"} {
+		t.Run(behavior, func(t *testing.T) {
+			bin := t.TempDir()
+			t.Setenv("PATH", bin)
+			if behavior != "missing" {
+				script := "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done\n"
+				if behavior == "failure" {
+					script = "#!/bin/sh\nexit 1\n"
+				}
+				if err := os.WriteFile(filepath.Join(bin, "less"), []byte(script), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out, errOut bytes.Buffer
+			err := pageOverview(content, &out, &errOut)
+			if behavior == "failure" {
+				if err == nil || !strings.Contains(err.Error(), "overview pager") {
+					t.Fatalf("pager failure was hidden: %v", err)
+				}
+				return
+			}
+			if err != nil || out.String() != content {
+				t.Fatalf("overview lost content: %v, %q", err, &out)
+			}
+		})
+	}
+}
 
 func TestColorModes(t *testing.T) {
 	for _, env := range []struct{ noColor, term string }{{"", "xterm-256color"}, {"1", "xterm"}, {"", "dumb"}} {

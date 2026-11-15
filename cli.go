@@ -258,6 +258,8 @@ func treeUsage(w io.Writer, mode string) {
 		helpRow{"-h, --help", "Show this help."})
 	fmt.Fprintln(w, "  Auto honors NO_COLOR and TERM=dumb. Explicit --color overrides them;")
 	fmt.Fprintln(w, "  place it before --help. Flags must come before BASE.")
+	fmt.Fprintln(w, "  Long interactive overviews open at the top in less: arrows/Space scroll,")
+	fmt.Fprintln(w, "  / searches, q quits. Pipes and JSON print directly.")
 	helpSection(w, s, "Examples",
 		helpRow{"cmt -tF ~/code", "Show repositories and their changed files."},
 		helpRow{"cmt -tGF --all ~/code", "Show dependency graphs, files and clean repositories."},

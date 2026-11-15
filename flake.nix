@@ -42,6 +42,7 @@
                   pkgs.lib.makeBinPath [
                     pkgs.git
                     pkgs.gh
+                    pkgs.less
                   ]
                 }
               ln -s commitell "$out/bin/cmt"

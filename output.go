@@ -1,13 +1,50 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"unicode/utf8"
 )
+
+// Only interactive, human-readable overviews use a pager. Keep pipes and JSON
+// suitable for scripts, and decide colors against the original output stream.
+func treeOverview(opts treeOptions, in io.Reader, out, errOut io.Writer) error {
+	file, ok := out.(*os.File)
+	if opts.asJSON || !ok || !isTerminal(file) || !isTerminal(in) || os.Getenv("TERM") == "dumb" {
+		return treeCommand(opts, out)
+	}
+	if styleFor(opts.colorMode, out).color {
+		opts.colorMode = "always"
+	}
+	var content bytes.Buffer
+	if err := treeCommand(opts, &content); err != nil {
+		return err
+	}
+	return pageOverview(content.String(), out, errOut)
+}
+
+func pageOverview(content string, out, errOut io.Writer) error {
+	// less reads navigation keys from the terminal while consuming our output
+	// on stdin. Start at the beginning; retain colors and exit for short output.
+	cmd := exec.Command("less", "-R", "-F", "+g")
+	cmd.Stdin = strings.NewReader(content)
+	cmd.Stdout, cmd.Stderr = out, errOut
+	cmd.Env = append(os.Environ(), "LESS=", "LESSOPEN=", "LESSCLOSE=", "LESSSECURE=1")
+	if err := cmd.Start(); err != nil {
+		// A missing or unavailable pager must not hide the overview.
+		_, err = io.WriteString(out, content)
+		return err
+	}
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("overview pager: %w", err)
+	}
+	return nil
+}
 
 // Only fixed SGR parameters belong here. Escape untrusted labels before styling.
 const (
