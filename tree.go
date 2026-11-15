@@ -57,49 +57,64 @@ func treeArguments(args []string) ([]string, bool) {
 	return append(expanded, args[1:]...), true
 }
 
-func treeCommand(args []string, out io.Writer) error {
+type treeOptions struct {
+	files, reposOnly, all, graph, asJSON bool
+	colorMode, base                      string
+	depth, limit                         int
+}
+
+func parseTreeOptions(args []string) (treeOptions, error) {
+	var opts treeOptions
 	flags := flag.NewFlagSet("cmt tree", flag.ContinueOnError)
-	flags.SetOutput(out)
-	files := flags.Bool("files", false, "show changed paths")
-	flags.BoolVar(files, "f", false, "show changed paths")
-	flags.BoolVar(files, "F", false, "show changed paths")
-	reposOnly := flags.Bool("repos", false, "show repository summaries")
-	flags.BoolVar(reposOnly, "r", false, "show repository summaries")
-	all := flags.Bool("all", false, "include clean repositories")
-	flags.BoolVar(all, "A", false, "include clean repositories")
-	graph := flags.Bool("graph", false, "show local repository dependencies from flake.lock")
-	flags.BoolVar(graph, "G", false, "show local repository dependencies from flake.lock")
-	asJSON := flags.Bool("json", false, "print structured repository status")
-	colorMode := flags.String("color", "auto", "color output: auto, always or never (auto honors NO_COLOR)")
-	depth := flags.Int("depth", 6, "maximum directory discovery depth")
-	limit := flags.Int("max-files", 10, "maximum paths per repository (0: all)")
-	flags.Usage = func() {
-		fmt.Fprintln(out, "Usage: cmt -t[FGA] [--json] [--color WHEN] [BASE]\n       cmt tree [--files] [--all] [--graph] [--json] [--color WHEN] [BASE]\nShortcuts: -tF files, -tG graph, -tA all repositories; combine as -tGF.\nBASE defaults to CMT_ROOT, then RT_ROOT, then ~/code. Local refs only; no fetch.")
-		flags.PrintDefaults()
+	flags.SetOutput(io.Discard)
+	flags.BoolVar(&opts.files, "files", false, "show changed paths")
+	flags.BoolVar(&opts.files, "f", false, "show changed paths")
+	flags.BoolVar(&opts.files, "F", false, "show changed paths")
+	flags.BoolVar(&opts.reposOnly, "repos", false, "show repository summaries")
+	flags.BoolVar(&opts.reposOnly, "r", false, "show repository summaries")
+	flags.BoolVar(&opts.all, "all", false, "include clean repositories")
+	flags.BoolVar(&opts.all, "A", false, "include clean repositories")
+	flags.BoolVar(&opts.graph, "graph", false, "show local repository dependencies from flake.lock")
+	flags.BoolVar(&opts.graph, "G", false, "show local repository dependencies from flake.lock")
+	flags.BoolVar(&opts.asJSON, "json", false, "print structured repository status")
+	flags.StringVar(&opts.colorMode, "color", "auto", "color output: auto, always or never")
+	flags.IntVar(&opts.depth, "depth", 6, "maximum directory discovery depth")
+	flags.IntVar(&opts.limit, "max-files", 10, "maximum paths per repository (0: all)")
+	parseErr := flags.Parse(args)
+	if err := validateColorMode(opts.colorMode); err != nil {
+		return opts, err
 	}
-	for name, target := range map[string]*int{"RT_DEPTH": depth, "RT_MAX_FILES": limit} {
+	if parseErr != nil {
+		return opts, parseErr
+	}
+	// Explicit flags win over legacy environment defaults. Help never needs
+	// valid runtime configuration or an accessible base directory.
+	visited := make(map[string]bool)
+	flags.Visit(func(f *flag.Flag) { visited[f.Name] = true })
+	for name, target := range map[string]struct {
+		flag  string
+		value *int
+	}{"RT_DEPTH": {"depth", &opts.depth}, "RT_MAX_FILES": {"max-files", &opts.limit}} {
+		if visited[target.flag] {
+			continue
+		}
 		if value := os.Getenv(name); value != "" {
 			n, err := strconv.Atoi(value)
 			if err != nil {
-				return fmt.Errorf("invalid %s", name)
+				return opts, fmt.Errorf("invalid %s", name)
 			}
-			*target = n
+			*target.value = n
 		}
 	}
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
+	if flags.NArg() > 1 || opts.depth < 1 || opts.depth > 99 || opts.limit < 0 || opts.limit > 9999 {
+		return opts, errors.New("expected one base directory, depth 1..99 and max-files 0..9999")
 	}
-	if flags.NArg() > 1 || *depth < 1 || *depth > 99 || *limit < 0 || *limit > 9999 {
-		return errors.New("expected one base directory, depth 1..99 and max-files 0..9999")
-	}
-	color, err := treeColor(*colorMode, out)
-	if err != nil {
-		return err
-	}
-	base := flags.Arg(0)
+	opts.base = flags.Arg(0)
+	return opts, nil
+}
+
+func treeCommand(opts treeOptions, out io.Writer) error {
+	base := opts.base
 	if base == "" {
 		base = os.Getenv("CMT_ROOT")
 	}
@@ -113,7 +128,7 @@ func treeCommand(args []string, out io.Writer) error {
 		}
 		base = filepath.Join(home, "code")
 	}
-	base, err = filepath.Abs(base)
+	base, err := filepath.Abs(base)
 	if err != nil {
 		return err
 	}
@@ -124,21 +139,21 @@ func treeCommand(args []string, out io.Writer) error {
 	if !info.IsDir() {
 		return fmt.Errorf("not a directory: %q", base)
 	}
-	repos, err := scanTree(base, *depth, *graph)
+	repos, err := scanTree(base, opts.depth, opts.graph)
 	if err != nil {
 		return err
 	}
 	selected := []treeRepo{}
 	for _, repo := range repos {
-		if *all || *graph || len(repo.Changes) > 0 || !repoInSync(repo) {
+		if opts.all || opts.graph || len(repo.Changes) > 0 || !repoInSync(repo) {
 			selected = append(selected, repo)
 		}
 	}
-	if *asJSON {
+	if opts.asJSON {
 		return json.NewEncoder(out).Encode(selected)
 	}
-	r := treeRenderer{out: out, style: treeStyle{color: color}, files: *files && !*reposOnly, limit: *limit, all: *all}
-	if *graph {
+	r := treeRenderer{out: out, style: styleFor(opts.colorMode, out), files: opts.files && !opts.reposOnly, limit: opts.limit, all: opts.all}
+	if opts.graph {
 		r.println(r.style.paint(sgrBold, treeLabel(base)))
 		r.renderDependencyGraph(selected)
 	} else {

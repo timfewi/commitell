@@ -85,45 +85,58 @@ type chatResponse struct {
 }
 
 func main() {
-	if args, tree := treeArguments(os.Args[1:]); tree {
-		if err := treeCommand(args, os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, "commitell tree:", err)
-			os.Exit(1)
+	os.Exit(command(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+func command(args []string, in io.Reader, out, errOut io.Writer) int {
+	if args, tree := treeArguments(args); tree {
+		opts, err := parseTreeOptions(args)
+		if errors.Is(err, flag.ErrHelp) {
+			treeUsage(out, opts.colorMode)
+			return 0
 		}
-		return
+		if err == nil {
+			err = treeCommand(opts, out)
+		}
+		if err != nil {
+			printDiagnostic(errOut, opts.colorMode, "commitell tree", err)
+			return 1
+		}
+		return 0
 	}
-	opts, err := parseOptions(os.Args[1:])
+	opts, err := parseOptions(args)
 	if errors.Is(err, flag.ErrHelp) {
-		usage(os.Stdout)
-		return
+		usage(out, opts.colorMode)
+		return 0
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "commitell:", err)
-		fmt.Fprintln(os.Stderr, "Try --help for usage.")
-		os.Exit(2)
+		printDiagnostic(errOut, opts.colorMode, "commitell", err)
+		fmt.Fprintln(errOut, "Try --help for usage.")
+		return 2
 	}
 	if opts.version {
-		fmt.Println("commitell", currentVersion())
-		return
+		fmt.Fprintln(out, "commitell", currentVersion())
+		return 0
 	}
 	cfg, err := modelConfig(os.Getenv, opts)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "commitell:", err)
-		os.Exit(2)
+		printDiagnostic(errOut, opts.colorMode, "commitell", err)
+		return 2
 	}
 	cfg.client = &http.Client{Timeout: 30 * time.Second}
-	cfg.in, cfg.out, cfg.errOut = os.Stdin, os.Stdout, os.Stderr
-	cfg.interactive = isTerminal(os.Stdin)
+	cfg.in, cfg.out, cfg.errOut = in, out, errOut
+	cfg.interactive = isTerminal(in)
 	dir, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "commitell:", err)
-		os.Exit(1)
+		printDiagnostic(errOut, opts.colorMode, "commitell", err)
+		return 1
 	}
 	cfg.dir = dir
 	if err := run(context.Background(), cfg); err != nil {
-		fmt.Fprintln(os.Stderr, "commitell:", err)
-		os.Exit(1)
+		printDiagnostic(errOut, opts.colorMode, "commitell", err)
+		return 1
 	}
+	return 0
 }
 
 func currentVersion() string {
@@ -155,9 +168,9 @@ func run(ctx context.Context, cfg config) error {
 	}
 	if cfg.options.force {
 		if cfg.options.offline {
-			fmt.Fprintln(cfg.errOut, "commitell: warning: --force bypasses local secret checks")
+			cfg.notice(cfg.errOut, sgrYellow, "warning: --force bypasses local secret checks")
 		} else {
-			fmt.Fprintln(cfg.errOut, "commitell: warning: --force bypasses local secret checks and may send sensitive content to the selected model")
+			cfg.notice(cfg.errOut, sgrYellow, "warning: --force bypasses local secret checks and may send sensitive content to the selected model")
 		}
 	}
 	publishPlan, err := preflightPublish(cfg, root)
@@ -220,7 +233,7 @@ func run(ctx context.Context, cfg config) error {
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("git commit failed (changes remain staged): %w", err)
 		}
-		fmt.Fprintf(cfg.out, "commitell: committed with %s\n", group.model)
+		cfg.notice(cfg.out, sgrGreen, fmt.Sprintf("committed with %s", group.model))
 	}
 	if publishPlan != nil {
 		if err := publish(ctx, cfg, root, *publishPlan); err != nil {
@@ -349,9 +362,9 @@ func confirmSecretFindings(cfg config, findings []secretFinding) error {
 	if errOut == nil {
 		errOut = io.Discard
 	}
-	fmt.Fprintln(errOut, "commitell: warning: possible secrets detected:")
+	cfg.notice(errOut, sgrYellow, "warning: possible secrets detected:")
 	for _, finding := range findings {
-		fmt.Fprintf(errOut, "  - %s: %s\n", finding.Location, finding.Kind)
+		fmt.Fprintf(errOut, "  - %s: %s\n", treeLabel(finding.Location), finding.Kind)
 	}
 	if cfg.options.offline {
 		fmt.Fprintln(errOut, "The selected content will be committed locally and may be published by explicit push options.")
@@ -361,14 +374,14 @@ func confirmSecretFindings(cfg config, findings []secretFinding) error {
 	if !cfg.interactive || cfg.in == nil {
 		return errors.New("possible secrets require confirmation from an interactive terminal; review the findings, then use --exclude or rerun with --force")
 	}
-	fmt.Fprint(errOut, "Continue anyway? [y/N] ")
+	fmt.Fprint(errOut, styleFor(cfg.options.colorMode, errOut).paint(sgrYellow, "Continue anyway? [y/N] "))
 	answer, err := bufio.NewReader(cfg.in).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("read secret confirmation: %w", err)
 	}
 	answer = strings.TrimSpace(answer)
 	if strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes") {
-		fmt.Fprintln(errOut, "commitell: continuing after secret warning confirmation")
+		cfg.notice(errOut, sgrYellow, "continuing after secret warning confirmation")
 		return nil
 	}
 	return errors.New("cancelled by user; nothing was sent or committed")
@@ -444,7 +457,7 @@ CHANGES:
 			return message, model, nil
 		}
 		failures = append(failures, model+": "+err.Error())
-		fmt.Fprintf(cfg.errOut, "commitell: %s failed; trying fallback\n", model)
+		cfg.notice(cfg.errOut, sgrYellow, fmt.Sprintf("%s failed to generate a message", model))
 	}
 	return commitMessage{}, "", fmt.Errorf("all OpenAI models failed; nothing was staged: %s", strings.Join(failures, "; "))
 }

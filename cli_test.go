@@ -128,12 +128,12 @@ func TestParseOptionsRejectsAmbiguousValueCluster(t *testing.T) {
 
 func TestUsageExplainsOptionsPrivacyAndUseCases(t *testing.T) {
 	var out bytes.Buffer
-	usage(&out)
+	usage(&out, "auto")
 	for _, want := range []string{
-		"Change selection:",
-		"Models and privacy:",
-		"Short option clusters:",
-		"Common use cases:",
+		"Change selection",
+		"Messages",
+		"Boolean short options can be clustered",
+		"Examples",
 		"commitell -scd",
 		"gpt-6-luna",
 		"Selected changes are sent directly to OpenAI",
@@ -147,7 +147,7 @@ func TestUsageExplainsOptionsPrivacyAndUseCases(t *testing.T) {
 
 func TestUsageDocumentsOnlyOpenAI(t *testing.T) {
 	var out bytes.Buffer
-	usage(&out)
+	usage(&out, "auto")
 	for _, unwanted := range []string{"COMMITELL_PROVIDER", "COMMITELL_BASE_URL", "OpenRouter", "opencode", "--auto-model", "--eu", "--models"} {
 		if strings.Contains(out.String(), unwanted) {
 			t.Errorf("help documents removed setting %q", unwanted)

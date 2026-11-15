@@ -1,54 +1,13 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 )
-
-// SGR parameters used by the overview. Only fixed escape sequences are
-// emitted; repository-controlled text is passed through treeLabel first.
-const (
-	sgrBold    = "1"
-	sgrDim     = "2"
-	sgrRed     = "31"
-	sgrGreen   = "32"
-	sgrYellow  = "33"
-	sgrMagenta = "35"
-	sgrCyan    = "36"
-	sgrDir     = "1;34"
-	sgrPath    = "34"
-	sgrAlert   = "1;35"
-)
-
-type treeStyle struct{ color bool }
-
-func (s treeStyle) paint(sgr, text string) string {
-	if !s.color || strings.TrimSpace(text) == "" {
-		return text
-	}
-	return "\x1b[" + sgr + "m" + text + "\x1b[0m"
-}
-
-// treeColor resolves --color. In auto mode, color requires a terminal and
-// follows the NO_COLOR convention and TERM=dumb.
-func treeColor(mode string, out io.Writer) (bool, error) {
-	switch mode {
-	case "always":
-		return true, nil
-	case "never":
-		return false, nil
-	case "auto":
-		file, ok := out.(*os.File)
-		return ok && isTerminal(file) && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb", nil
-	}
-	return false, errors.New("--color must be auto, always or never")
-}
 
 type branchState struct {
 	local, upstream        string
@@ -125,7 +84,7 @@ func plural(n int, one, many string) string {
 
 type treeRenderer struct {
 	out   io.Writer
-	style treeStyle
+	style outputStyle
 	files bool
 	limit int
 	all   bool

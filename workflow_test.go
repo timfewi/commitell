@@ -236,11 +236,14 @@ func TestValidateSplitPlanRequiresExactCoverage(t *testing.T) {
 }
 
 func TestRunDryRunDoesNotChangeGit(t *testing.T) {
-	server := commitMessageServer(t, "feat: preview change")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeChatContent(t, w, `{"subject":"feat: preview change","body":"Explain the reason.\nKeep the full message visible."}`)
+	}))
 	defer server.Close()
 	repo := newRepository(t)
 	writeFile(t, filepath.Join(repo, "tracked.txt"), "changed\n")
 	before := git(t, repo, "rev-parse", "HEAD")
+	statusBefore := git(t, repo, "status", "--porcelain=v1")
 	var out bytes.Buffer
 	cfg := testConfig(repo, server, options{dryRun: true})
 	cfg.out = &out
@@ -252,6 +255,12 @@ func TestRunDryRunDoesNotChangeGit(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "commitell: dry run") {
 		t.Fatalf("missing dry-run output: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "Explain the reason.\n  Keep the full message visible.") {
+		t.Fatalf("dry run omitted the commit body: %s", &out)
+	}
+	if after := git(t, repo, "status", "--porcelain=v1"); after != statusBefore {
+		t.Fatalf("dry run changed the index/worktree: %q -> %q", statusBefore, after)
 	}
 }
 
@@ -426,7 +435,7 @@ func TestRunComposesStagedExcludeSplitSolverAndPullRequest(t *testing.T) {
 	cfg := testConfig(repo, server, opts)
 	cfg.models = opts.solvers
 	if err := run(context.Background(), cfg); err != nil {
-		t.Fatal(err)
+		t.Fatalf("run: %v\nstdout: %s\nstderr: %s", err, cfg.out, cfg.errOut)
 	}
 
 	if got := strings.Join(requested, ","); got != "model/first,model/second,model/first,model/second,model/first,model/second" {

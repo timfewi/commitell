@@ -41,3 +41,7 @@ run *args:
 # Show commitell's user help.
 help:
     go run . --help
+
+# Show the repository overview help.
+tree-help:
+    go run . tree --help

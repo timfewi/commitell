@@ -348,7 +348,7 @@ CHANGES:
 			}
 		}
 		failures = append(failures, model+": "+err.Error())
-		fmt.Fprintf(cfg.errOut, "commitell: %s failed to plan split; trying fallback\n", model)
+		cfg.notice(cfg.errOut, sgrYellow, fmt.Sprintf("%s failed to plan split", model))
 	}
 	return nil, fmt.Errorf("all OpenAI models failed to plan commits: %s", strings.Join(failures, "; "))
 }
@@ -417,7 +417,7 @@ func commitScoped(ctx context.Context, cfg config, root string, groups []commitG
 		if err := commitWithTemporaryIndex(ctx, cfg, root, group); err != nil {
 			return fmt.Errorf("commit group %d of %d failed after %d completed group(s): %w", index+1, len(groups), index, err)
 		}
-		fmt.Fprintf(cfg.out, "commitell: committed group %d/%d with %s\n", index+1, len(groups), group.model)
+		cfg.notice(cfg.out, sgrGreen, fmt.Sprintf("committed group %d/%d with %s", index+1, len(groups), group.model))
 	}
 	return nil
 }
@@ -513,19 +513,24 @@ func gitOutputEnv(root string, env []string, stdin io.Reader, args ...string) ([
 }
 
 func printDryRun(cfg config, groups []commitGroup, publish *publishPlan) {
-	fmt.Fprintf(cfg.out, "commitell: dry run (%d commit(s))\n", len(groups))
+	s := styleFor(cfg.options.colorMode, cfg.out)
+	cfg.notice(cfg.out, sgrCyan, fmt.Sprintf("dry run (%s)", plural(len(groups), "commit", "commits")))
 	for i, group := range groups {
-		fmt.Fprintf(cfg.out, "\n[%d/%d] %s\n", i+1, len(groups), group.message.Subject)
+		fmt.Fprintf(cfg.out, "\n%s %s\n", s.paint(sgrCyan, fmt.Sprintf("[%d/%d]", i+1, len(groups))), s.paint(sgrBold, treeLabel(group.message.Subject)))
+		if group.message.Body != "" {
+			fmt.Fprintf(cfg.out, "\n  %s\n\n", strings.ReplaceAll(group.message.Body, "\n", "\n  "))
+		}
 		for _, path := range snapshotPaths(group.snapshot, false) {
-			fmt.Fprintf(cfg.out, "  %s\n", path)
+			fmt.Fprintf(cfg.out, "  %s\n", s.paint(sgrPath, treeLabel(path)))
 		}
 	}
 	if publish != nil {
-		fmt.Fprintf(cfg.out, "\nWould push %s to %s.\n", publish.branch, publish.remote)
+		fmt.Fprintf(cfg.out, "\nWould push %s to %s.\n", s.paint(sgrCyan, treeLabel(publish.branch)), s.paint(sgrCyan, treeLabel(publish.remote)))
 		if cfg.options.pullRequest {
-			fmt.Fprintf(cfg.out, "Would create a draft pull request into %s.\n", publish.base)
+			fmt.Fprintf(cfg.out, "Would create a draft pull request into %s.\n", s.paint(sgrCyan, treeLabel(publish.base)))
 		}
 	}
+	fmt.Fprintln(cfg.out, "\n"+s.paint(sgrDim, "No Git changes made; nothing published."))
 }
 
 func preflightPublish(cfg config, root string) (*publishPlan, error) {
@@ -586,7 +591,7 @@ func publish(ctx context.Context, cfg config, root string, plan publishPlan) err
 	view := exec.CommandContext(ctx, "gh", "pr", "view", plan.branch, "--json", "url", "--jq", ".url")
 	view.Dir = root
 	if output, err := view.Output(); err == nil && strings.TrimSpace(string(output)) != "" {
-		fmt.Fprintf(cfg.out, "commitell: pull request %s\n", strings.TrimSpace(string(output)))
+		cfg.notice(cfg.out, sgrGreen, fmt.Sprintf("pull request %s", strings.TrimSpace(string(output))))
 		return nil
 	}
 	create := exec.CommandContext(ctx, "gh", "pr", "create", "--draft", "--fill", "--base", plan.base, "--head", plan.branch)

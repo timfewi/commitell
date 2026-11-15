@@ -22,6 +22,7 @@ type options struct {
 	version     bool
 	remote      string
 	base        string
+	colorMode   string
 }
 
 type listValue struct {
@@ -72,7 +73,7 @@ var longOptions = map[string]bool{
 	"solver": true, "model": true, "offline": true,
 	"split": true, "dry-run": true, "push": true, "force": true,
 	"pr": true, "remote": true, "base": true, "version": true,
-	"help": true,
+	"help": true, "color": true,
 }
 
 func expandShortOptions(args []string) ([]string, error) {
@@ -128,43 +129,48 @@ func parseOptions(args []string) (options, error) {
 	boolFlag(&opts.split, "split", "c", "split changes into logical commits")
 	boolFlag(&opts.dryRun, "dry-run", "d", "show the plan without changing Git or publishing")
 	boolFlag(&opts.push, "push", "p", "push the current branch after committing")
-	boolFlag(&opts.force, "force", "f", "bypass local secret checks and allow a force-push to the default branch")
+	boolFlag(&opts.force, "force", "f", "skip secret confirmation and push with --force-with-lease")
 	boolFlag(&opts.pullRequest, "pr", "P", "push and create a draft pull request")
 	set.StringVar(&opts.remote, "remote", "origin", "Git remote used for publishing")
 	set.StringVar(&opts.remote, "r", "origin", "Git remote used for publishing")
 	set.StringVar(&opts.base, "base", "", "default and pull-request base branch")
 	set.StringVar(&opts.base, "b", "", "default and pull-request base branch")
 	boolFlag(&opts.version, "version", "v", "print the version")
+	set.StringVar(&opts.colorMode, "color", "auto", "color output: auto, always or never")
 	expanded, err := expandShortOptions(args)
 	if err != nil {
-		return options{}, err
+		return opts, err
 	}
-	if err := set.Parse(expanded); err != nil {
-		return options{}, err
+	parseErr := set.Parse(expanded)
+	if err := validateColorMode(opts.colorMode); err != nil {
+		return opts, err
+	}
+	if parseErr != nil {
+		return opts, parseErr
 	}
 	if set.NArg() != 0 {
-		return options{}, fmt.Errorf("unexpected argument %q", set.Arg(0))
+		return opts, fmt.Errorf("unexpected argument %q", set.Arg(0))
 	}
 	if opts.pullRequest {
 		opts.push = true
 	}
 	if opts.offline && (len(opts.solvers) != 0 || opts.split) {
-		return options{}, errors.New("--offline cannot be combined with --model, --solver, or --split")
+		return opts, errors.New("--offline cannot be combined with --model, --solver, or --split")
 	}
 	if strings.TrimSpace(opts.remote) == "" {
-		return options{}, errors.New("--remote must not be empty")
+		return opts, errors.New("--remote must not be empty")
 	}
 	for i, path := range opts.excludes {
 		clean, err := normalizeExclude(path)
 		if err != nil {
-			return options{}, err
+			return opts, err
 		}
 		opts.excludes[i] = clean
 	}
 	for i, model := range opts.solvers {
 		model = strings.TrimSpace(model)
 		if model == "" {
-			return options{}, errors.New("--model must not be empty")
+			return opts, errors.New("--model must not be empty")
 		}
 		opts.solvers[i] = model
 	}
@@ -183,93 +189,81 @@ func normalizeExclude(path string) (string, error) {
 	return clean, nil
 }
 
-func usage(w io.Writer) {
-	fmt.Fprint(w, `Usage:
-  commitell [options]
-  cmt -t[FGA] [tree options] [BASE]
-  cmt tree [--files] [--all] [--graph] [--json] [BASE]
+func usage(w io.Writer, mode string) {
+	s := styleFor(mode, w)
+	fmt.Fprintln(w, s.paint(sgrBold, "commitell")+" — turn Git changes into DCO-signed commits")
+	helpSection(w, s, "Usage",
+		helpRow{"commitell [options]", "Generate a message, then stage and commit changes."},
+		helpRow{"cmt -t[FGA] [options] [BASE]", "Inspect repositories; no API key needed."})
+	fmt.Fprintf(w, "\n  With no options: analyze all changes using OpenAI %s.\n", defaultModel)
+	helpSection(w, s, "Change selection",
+		helpRow{"-s, --staged", "Commit only content already in the Git index."},
+		helpRow{"-x, --exclude FILES", "Exclude exact relative paths; repeat or separate with commas."},
+		helpRow{"-c, --split", "Group whole files into up to eight logical commits."})
+	helpSection(w, s, "Messages",
+		helpRow{"-o, --offline", "Generate locally without an API key; excludes --model/--split."},
+		helpRow{"-m, --model MODEL", "Repeat for fallback order; replaces COMMITELL_MODELS."},
+		helpRow{"    --solver MODEL", "Alias for --model."})
+	helpSection(w, s, "Preview and publishing",
+		helpRow{"-d, --dry-run", "Show the plan without changing Git or publishing."},
+		helpRow{"-p, --push", "Push the current branch after all commits succeed."},
+		helpRow{"-P, --pr", "Push and open a draft pull request using gh."},
+		helpRow{"-r, --remote NAME", "Publishing remote (default: origin)."},
+		helpRow{"-b, --base BRANCH", "Protected default branch and pull-request base."},
+		helpRow{"-f, --force", "Skip secret confirmation; push with --force-with-lease."})
+	fmt.Fprintln(w, "  Publishing the default branch requires --force; --pr needs a feature branch.")
+	helpSection(w, s, "Output",
+		helpRow{"    --color WHEN", "auto, always or never (default: auto)."},
+		helpRow{"-v, --version", "Print the version."},
+		helpRow{"-h, --help", "Show this help."})
+	fmt.Fprintln(w, "  Auto colors terminals only, respecting NO_COLOR and TERM=dumb.")
+	fmt.Fprintln(w, "  Explicit --color overrides the environment; use it before --help.")
+	helpSection(w, s, "Examples",
+		helpRow{"commitell -od", "Preview a local message without contacting OpenAI."},
+		helpRow{"commitell -scd", "Preview a model-generated split of staged changes."},
+		helpRow{"commitell -cP -b main", "Split, commit, push and open a draft pull request."},
+		helpRow{"cmt -tGF", "Show dependency trees with changed files."},
+		helpRow{"cmt -t --help", "Show all repository overview options."})
+	fmt.Fprintln(w, "  Boolean short options can be clustered: -scd = --staged --split --dry-run.")
+	fmt.Fprintln(w, "  Value options must be separate or last in a cluster: -sdm "+defaultModel+".")
+	helpSection(w, s, "Environment",
+		helpRow{"COMMITELL_API_KEY", "OpenAI key; not needed for --offline, help or tree."},
+		helpRow{"COMMITELL_MODELS", "Comma-separated model fallback order (default: " + defaultModel + ")."},
+		helpRow{"NO_COLOR", "Any non-empty value disables automatic color."})
+	fmt.Fprintln(w, "\n"+s.paint(sgrBold, "Privacy and safety"))
+	fmt.Fprintln(w, "  Selected changes are sent directly to OpenAI unless --offline is set.")
+	fmt.Fprintln(w, "  Possible secrets require confirmation before sending or staging. Unattended")
+	fmt.Fprintln(w, "  runs stop for review; use --exclude or --force after inspecting the content.")
+	fmt.Fprintln(w, "  Git hooks remain active. Nothing is pushed without --push or --pr.")
+}
 
-Create one or more DCO-signed Git commits. By default, commitell analyzes the
-complete dirty working tree with OpenAI gpt-6-luna, then stages and commits
-all changes only after a valid message is ready.
-
-Repository overview (no API key needed):
-  -t                    Show repositories with changes or ahead/behind status.
-  -tF                   Include changed files.
-  -tG                   Show repository dependencies and Git status.
-  -tA                   Include clean repositories.
-                         Combine as -tGF; use -t --help for all tree options.
-                         Colored on a terminal; --color never or NO_COLOR
-                         disables it.
-
-Change selection:
-  -s, --staged           Commit only changes already in the Git index.
-  -x, --exclude FILES    Exclude exact repository-relative paths. Repeat the
-                         option or pass comma-separated paths.
-  -c, --split            Ask the model to split whole files into logical commits.
-
-Models and privacy:
-  -m, --model MODEL      Model to try. Repeat to define the complete fallback
-                         order. --solver is a legacy alias and also uses -m.
-  -o, --offline          Generate a conservative message locally. No API key
-                         or model provider is involved.
-
-Preview and publishing:
-  -d, --dry-run          Print the commit and publish plan without changing Git.
-  -p, --push             Push the current branch after every commit succeeds.
-  -P, --pr               Push and create a draft pull request; implies --push.
-  -r, --remote NAME      Git remote used for publishing (default: origin).
-  -b, --base BRANCH      Protected default branch and pull-request base.
-  -f, --force            Skip likely-secret confirmation. Also permits a
-                         force-with-lease push from the declared default branch.
-
-General:
-  -v, --version          Print the version.
-  -h, --help             Show this help.
-
-Short option clusters:
-  Boolean short options can be combined. For example, -scd is equivalent to
-  --staged --split --dry-run. Options that take a value (-x, -m, -r, -b) must
-  be written separately or placed last in a cluster:
-    commitell -sdm gpt-6-luna
-
-Common use cases:
-  Safest local commit; no model provider receives the diff:
-    commitell --offline
-    commitell -o
-
-  Use OpenAI with the default gpt-6-luna model:
-    commitell
-
-  Preview staged changes without committing:
-    commitell --staged --dry-run
-    commitell -sd
-
-  Preview a model-generated split of staged files:
-    commitell --staged --split --dry-run
-    commitell -scd
-
-  Exclude local or generated files:
-    commitell -x .env.example,dist/output.json --dry-run
-
-  Choose an explicit fallback order:
-    commitell -m gpt-6-luna -m gpt-4o-mini
-
-  Push a feature branch and open a draft pull request:
-    commitell --split --pr --base main
-    commitell -cP -b main
-
-Privacy and safety:
-  Selected changes are sent directly to OpenAI. Account data policies apply.
-  Likely-secret matches are shown by location and type, then require a y/N
-  confirmation before any model request or staging. Non-interactive runs fail
-  closed; use --exclude or the explicit --force override after reviewing the
-  content. Cloud availability cannot be guaranteed. Use --offline when the
-  commit must work without a model provider. Normal Git hooks still run.
-
-Environment:
-  COMMITELL_API_KEY      OpenAI API key. Required except with --offline or tree.
-  COMMITELL_MODELS       Comma-separated fallback order (default: gpt-6-luna).
-                         Repeated --model flags replace this order.
-`)
+func treeUsage(w io.Writer, mode string) {
+	s := styleFor(mode, w)
+	fmt.Fprintln(w, s.paint(sgrBold, "cmt tree")+" — inspect local repositories and their dependencies")
+	helpSection(w, s, "Usage",
+		helpRow{"cmt -t[FGA] [options] [BASE]", "Put -t first; combine shortcuts as -tGF."},
+		helpRow{"cmt tree [options] [BASE]", "Long-form command; same overview."})
+	fmt.Fprintln(w, "\n  Shows changes and locally known ahead/behind status. No API key, model")
+	fmt.Fprintln(w, "  request or fetch. Does not execute repository code or evaluate Nix files.")
+	helpSection(w, s, "View",
+		helpRow{"-F, -f, --files", "List changed paths using Git's short status format."},
+		helpRow{"-r, --repos", "Show summaries only; overrides --files."},
+		helpRow{"-A, --all", "Include clean repositories."},
+		helpRow{"-G, --graph", "Show consumer → input links from direct flake.lock inputs."},
+		helpRow{"    --json", "Emit repository records as JSON; never colored."})
+	helpSection(w, s, "Discovery and output",
+		helpRow{"    --depth N", "Discovery depth, 1..99 (default: 6)."},
+		helpRow{"    --max-files N", "Paths per repository, 0..9999; 0 = all (default: 10)."},
+		helpRow{"    --color WHEN", "auto, always or never (default: auto)."},
+		helpRow{"-h, --help", "Show this help."})
+	fmt.Fprintln(w, "  Auto honors NO_COLOR and TERM=dumb. Explicit --color overrides them;")
+	fmt.Fprintln(w, "  place it before --help. Flags must come before BASE.")
+	helpSection(w, s, "Examples",
+		helpRow{"cmt -tF ~/code", "Show repositories and their changed files."},
+		helpRow{"cmt -tGF --all ~/code", "Show dependency graphs, files and clean repositories."},
+		helpRow{"cmt -tG --json ~/code", "Export dependency and status records."})
+	helpSection(w, s, "Environment",
+		helpRow{"CMT_ROOT", "Default BASE (fallback: RT_ROOT, then ~/code)."},
+		helpRow{"RT_DEPTH, RT_MAX_FILES", "Legacy defaults; explicit flags take precedence."},
+		helpRow{"NO_COLOR", "Any non-empty value disables automatic color."})
 }

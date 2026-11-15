@@ -3,11 +3,20 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func runTree(args []string, out io.Writer) error {
+	opts, err := parseTreeOptions(args)
+	if err != nil {
+		return err
+	}
+	return treeCommand(opts, out)
+}
 
 func treeFixture(t *testing.T, base, name string) string {
 	t.Helper()
@@ -54,10 +63,10 @@ func TestTreeShortcutsMatchLongCommands(t *testing.T) {
 				t.Fatal("tree mode was not selected")
 			}
 			var short, long bytes.Buffer
-			if err := treeCommand(args, &short); err != nil {
+			if err := runTree(args, &short); err != nil {
 				t.Fatal(err)
 			}
-			if err := treeCommand(append(test.long, base), &long); err != nil {
+			if err := runTree(append(test.long, base), &long); err != nil {
 				t.Fatal(err)
 			}
 			if short.String() != long.String() {
@@ -78,7 +87,7 @@ func TestTreeSelectorKeepsCommitArgumentsSeparate(t *testing.T) {
 		if !selected {
 			t.Fatalf("invalid tree flag fell through to committing: %s", flag)
 		}
-		if err := treeCommand(args, &bytes.Buffer{}); err == nil {
+		if err := runTree(args, &bytes.Buffer{}); err == nil {
 			t.Fatalf("accepted invalid tree flag %s", flag)
 		}
 	}
@@ -95,7 +104,7 @@ func TestTreeOverview(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := treeCommand([]string{"--files", base}, &out); err != nil {
+	if err := runTree([]string{"--files", base}, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"nested", "dirty repo", "?? changed", "Repositories: 1"} {
@@ -104,7 +113,7 @@ func TestTreeOverview(t *testing.T) {
 		}
 	}
 	out.Reset()
-	if err := treeCommand([]string{"--json", "--all", base}, &out); err != nil {
+	if err := runTree([]string{"--json", "--all", base}, &out); err != nil {
 		t.Fatal(err)
 	}
 	var repos []treeRepo
@@ -115,7 +124,7 @@ func TestTreeOverview(t *testing.T) {
 		t.Fatalf("repos=%v", repos)
 	}
 	out.Reset()
-	if err := treeCommand([]string{"--depth", "2", base}, &out); err != nil {
+	if err := runTree([]string{"--depth", "2", base}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), "dirty repo") {
@@ -175,7 +184,7 @@ func TestTreeWorktreeAndErrors(t *testing.T) {
 	}
 	var out bytes.Buffer
 	for _, args := range [][]string{{"--depth", "0", base}, {"--invalid"}, {filepath.Join(base, "missing")}} {
-		if treeCommand(args, &out) == nil {
+		if runTree(args, &out) == nil {
 			t.Fatalf("accepted %v", args)
 		}
 	}
@@ -202,28 +211,27 @@ func TestTreeBranchParsing(t *testing.T) {
 
 func TestTreeColorModes(t *testing.T) {
 	var out bytes.Buffer
-	for mode, want := range map[string]bool{"always": true, "never": false, "auto": false} {
-		if got, err := treeColor(mode, &out); err != nil || got != want {
-			t.Fatalf("treeColor(%q) = %v, %v", mode, got, err)
-		}
-	}
-	if _, err := treeColor("sometimes", &out); err == nil {
-		t.Fatal("accepted invalid color mode")
-	}
 	base := t.TempDir()
 	writeFile(t, filepath.Join(treeFixture(t, base, "dirty\x1b[31m"), "changed"), "fixture")
-	if err := treeCommand([]string{"--color", "always", "--files", base}, &out); err != nil {
+	if err := runTree([]string{"--color", "always", "--files", base}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "\x1b[31m??\x1b[0m changed") || strings.Contains(out.String(), "dirty\x1b") {
 		t.Fatalf("unexpected colored output: %q", &out)
 	}
 	out.Reset()
-	if err := treeCommand([]string{"--color", "never", "--files", base}, &out); err != nil {
+	if err := runTree([]string{"--color", "never", "--files", base}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), "\x1b") {
 		t.Fatalf("color leaked with --color never: %q", &out)
+	}
+	out.Reset()
+	if err := runTree([]string{"--color", "always", "--json", base}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "\x1b") || !json.Valid(out.Bytes()) {
+		t.Fatalf("JSON must remain machine-readable with forced color: %q", &out)
 	}
 }
 
