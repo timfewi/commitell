@@ -201,6 +201,7 @@ func normalizeExclude(path string) (string, error) {
 func usage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   commitell [options]
+  cmt tree [--files] [--all] [--graph] [--json] [BASE]
 
 Create one or more DCO-signed Git commits. By default, commitell analyzes the
 complete dirty working tree with a fast model from the configured provider

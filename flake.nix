@@ -14,6 +14,10 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
+      homeModules.default = { lib, pkgs, ... }: {
+        imports = [ ./home-module.nix ];
+        programs.commitell.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+      };
       packages = forAllSystems (pkgs: rec {
         commitell =
           let
@@ -40,6 +44,7 @@
                     pkgs.gh
                   ]
                 }
+              ln -s commitell "$out/bin/cmt"
             '';
 
             meta = {

@@ -302,3 +302,38 @@ Nixpkgs submission checklist.
 ## License
 
 MIT
+
+## Repository overview
+
+The package also installs `cmt`. Use `cmt tree` to inspect repositories without
+an API key or model request:
+
+```sh
+cmt tree --files ~/code
+cmt tree --all ~/code
+cmt tree --graph ~/code
+cmt tree --graph --json ~/code
+```
+
+The directory view shows repositories with changes or locally known ahead/behind
+status. `--all` includes clean repositories. `--files` lists changed paths;
+`--max-files N` bounds each list (zero means all). `--depth N` bounds discovery.
+Linked worktrees and nested repositories are included; dependency/cache folders
+and directory symlinks are skipped. No fetch or repository code is executed.
+
+The graph shows **consumer → input** edges by matching direct `flake.lock`
+inputs to the discovered repositories' origin URLs. It includes clean repos,
+marks cycles, and omits external inputs without a matching local checkout.
+It does not infer dependencies for other build systems or evaluate Nix files.
+Unreadable repositories and malformed lockfiles fail visibly.
+
+The base directory defaults to `CMT_ROOT`, then legacy `RT_ROOT`, then `~/code`.
+Legacy `RT_DEPTH` and `RT_MAX_FILES` are accepted for migration from `rt`.
+`cmt` without a subcommand retains the existing commit workflow.
+
+The flake exports `homeModules.default` for Home Manager. Enable
+`programs.commitell.enable` to install `commitell` and `cmt` configured for
+OpenAI, defaulting to `gpt-6-luna`. Supply `COMMITELL_API_KEY` at runtime, or
+`COMMITELL_API_KEY_FILE`, or `programs.commitell.apiKeyFile`. The module fixes
+OpenAI's URL and needs no provider setting. `programs.commitell.model`,
+`COMMITELL_MODELS`, and `--model` select the model without changing providers.

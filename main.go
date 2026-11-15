@@ -105,6 +105,13 @@ type chatResponse struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "tree" {
+		if err := treeCommand(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "commitell tree:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	opts, err := parseOptions(os.Args[1:])
 	if errors.Is(err, flag.ErrHelp) {
 		usage(os.Stdout)
